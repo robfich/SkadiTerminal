@@ -68,6 +68,21 @@ zurücksetzen über *Konfiguration → Skalierung neu lernen*.
 **Templates im Repo:** Bilder im Ordner [`templates/`](templates/) werden in die EXE eingebaut
 und auf jedem PC automatisch bereitgestellt – auch ohne Google Drive.
 
+## Automatisch starten, wenn Dota läuft (SkadiWaechter)
+
+`waechter/skadi_waechter.pyw` läuft unsichtbar im Hintergrund und startet SkadiTerminal,
+sobald `dota2.exe` (oder CS2 & Co.) läuft. SkadiTerminal schließt sich 3 Minuten nach Spielende selbst.
+
+Der Wächter sucht SkadiTerminal in dieser Reihenfolge:
+1. im selben Ordner wie der Wächter (`SkadiTerminal.exe` / `skaditerminal.pyw`)
+2. im Google Drive: `…\_010_Aktiv\SkadiTerminal\SkadiTerminal.exe`
+3. Notlösung: altes `…\_010_Aktiv\Dota2_Draft_Helfer_Maerz\gterminal.pyw`
+
+**Einrichten:** `build.bat` → aus `dist\` die drei Dateien `SkadiTerminal.exe`, `SkadiWaechter.exe`,
+`Autostart_einrichten.bat` in einen Ordner legen (z. B. `…\_010_Aktiv\SkadiTerminal\`) →
+`Autostart_einrichten.bat` doppelklicken. Den alten `Prozesswatcher` aus dem Autostart entfernen
+(`Win + R` → `shell:startup` → Verknüpfung löschen).
+
 ## Bauen
 
 ```bat
