@@ -206,7 +206,14 @@ def set_template_meta(name: str, size: tuple[int, int]):
 # Prozesse
 # ──────────────────────────────────────────────────────────────────────────────
 STEAM_PROCS   = {"steam.exe", "steamwebhelper.exe"}
-GAME_PROCS    = {"dota2.exe", "cs2.exe", "pioneergame.exe"}
+# Standard-Spieleliste; die eigentliche Liste steht in der Config ("games") und ist in
+# der App bearbeitbar. GAME_PROCS wird beim Start/Speichern daraus befüllt.
+DEFAULT_GAMES = ["dota2.exe", "cs2.exe", "pioneergame.exe", "ut2004.exe"]
+GAME_PROCS    = set(DEFAULT_GAMES)
+
+def set_game_procs(games) -> None:
+    GAME_PROCS.clear()
+    GAME_PROCS.update(g.strip().lower() for g in games if g and g.strip())
 DISCORD_PROCS = {"discord.exe", "discordcanary.exe", "discordptb.exe"}
 D2_SETTINGS_PATH = r"G:\Meine Ablage\D2 Setting"
 
@@ -413,6 +420,7 @@ DEFAULT_CONFIG = {
         ]} for i in range(6)
     ],
     "active_item_set": 0,
+    "games": list(DEFAULT_GAMES),       # Spiele für Wächter, "Spiele schließen", Auto-Close
     "item_phase_enabled": True,
     "doppel_check_enabled": True,   # Phase D an/aus
 }
@@ -776,6 +784,7 @@ class SkadiTerminalApp:
         self.root = root
         self.root.title(APP_NAME)
         self.cfg  = load_config()
+        set_game_procs(self.cfg.get("games", DEFAULT_GAMES))
 
         # Theme & Schriftgröße
         # Design: "hell" | "grau" | "dunkel" (alte Configs: dark_mode → dunkel, sonst grau)
@@ -1141,6 +1150,7 @@ class SkadiTerminalApp:
             ("Zeiten & Hotkey",          self.open_timing_config),
             ("Item-Sets verwalten",      self.open_item_set_editor),
             ("Held-Pool verwalten",      self.open_hero_pool_manager),
+            ("Spiele-Liste bearbeiten",  self.open_games_editor),
             ("Eigenen Held hinzufügen",  self.open_hero_manager),
         ])
 
@@ -1935,6 +1945,58 @@ class SkadiTerminalApp:
     # ──────────────────────────────────────────────────────────────────
     # Timing & Hotkey Dialog
     # ──────────────────────────────────────────────────────────────────
+    def open_games_editor(self):
+        """Liste der Spiele (Prozessnamen) für Wächter, 'Spiele schließen' und Hotkey-Freigabe."""
+        win = tk.Toplevel(self.root)
+        win.title("Spiele-Liste")
+        win.configure(bg=PAL["bg"])
+        win.resizable(False, False)
+        win.grab_set()
+        win.focus_force()
+        frm = tk.Frame(win, bg=PAL["surface"], padx=12, pady=10)
+        frm.pack(fill="both", expand=True, padx=10, pady=10)
+        tk.Label(frm, justify="left", anchor="w", bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["small"],
+                 text="Ein Prozessname pro Zeile (Task-Manager → Details), z. B. eldenring.exe\n"
+                      "Gilt für: SkadiWaechter startet SkadiTerminal · Bild↑+Bild↓ / ✕ Spiele\n"
+                      "schließt sie · Enter-/Taste-4-Hotkeys wirken nur in diesen Spielen."
+                 ).pack(fill="x", pady=(0, 6))
+        txt = tk.Text(frm, width=34, height=10, bg=PAL["input_bg"], fg=PAL["text"],
+                      insertbackground=PAL["accent"], relief="flat", font=self._fonts["mono"],
+                      highlightthickness=1, highlightbackground=PAL["separator"])
+        txt.pack(fill="both", expand=True)
+        txt.insert("1.0", "\n".join(self.cfg.get("games", DEFAULT_GAMES)))
+
+        def add_foreground():
+            # Hilfe: 3 s Zeit, ins Spiel zu wechseln, dann wird dessen Prozessname übernommen
+            def _do():
+                time.sleep(3)
+                name = foreground_process_name()
+                if name:
+                    self.root.after(0, lambda: (txt.insert("end", ("\n" if txt.get("1.0", "end").strip() else "") + name),
+                                                self.status_var.set(f"'{name}' hinzugefügt — Speichern nicht vergessen.")))
+            self.status_var.set("Jetzt innerhalb von 3 s ins Spiel wechseln …")
+            threading.Thread(target=_do, daemon=True).start()
+
+        def save():
+            games = []
+            for line in txt.get("1.0", "end").splitlines():
+                g = line.strip().lower()
+                if g and g not in games:
+                    games.append(g if g.endswith(".exe") else g + ".exe")
+            self.cfg["games"] = games
+            set_game_procs(games)
+            save_config(self.cfg)
+            self.status_var.set(f"Spiele-Liste gespeichert ({len(games)}). Der Wächter übernimmt sie automatisch.")
+            win.destroy()
+
+        row = tk.Frame(frm, bg=PAL["surface"])
+        row.pack(fill="x", pady=(8, 0))
+        row.columnconfigure((0, 1, 2), weight=1)
+        self._btn(row, "＋ Spiel im Vordergrund", add_foreground).grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        self._btn(row, "Speichern", save, accent=True).grid(row=0, column=1, sticky="ew", padx=2)
+        self._btn(row, "Abbrechen", win.destroy).grid(row=0, column=2, sticky="ew", padx=(2, 0))
+
     def open_timing_config(self):
         win = tk.Toplevel(self.root)
         win.title("Zeiten & Hotkey")

@@ -9,12 +9,15 @@ import os
 import sys
 import time
 import subprocess
+import json
 from pathlib import Path
 
 import psutil
 
-# Spiele, die den Start auslösen sollen
+# Spiele, die den Start auslösen sollen. Wird überschrieben durch die Liste "games" in
+# skadi_config.json (in SkadiTerminal unter Konfiguration → Spiele-Liste bearbeiten).
 TARGET_GAMES = {"dota2.exe", "cs2.exe", "pioneergame.exe", "ut2004.exe"}
+CONFIG_REFRESH_SECONDS = 30.0
 
 # Wie oft prüfen (Sekunden)
 POLL_SECONDS = 2.0
@@ -64,6 +67,26 @@ def terminal_candidates() -> list[Path]:
     return cands
 
 
+def config_candidates() -> list[Path]:
+    cands = [HERE / "skadi_config.json"]
+    gd = find_gdrive_root()
+    if gd:
+        cands.append(gd / GDRIVE_PROJECT_DIR / "SkadiTerminal" / "skadi_config.json")
+    return cands
+
+
+def load_games() -> set[str]:
+    """Spieleliste aus der SkadiTerminal-Config; ohne Config die Standardliste."""
+    for p in config_candidates():
+        try:
+            games = json.loads(p.read_text(encoding="utf-8")).get("games")
+            if games:
+                return {g.strip().lower() for g in games if g and g.strip()}
+        except (OSError, ValueError, AttributeError):
+            continue
+    return {g.lower() for g in TARGET_GAMES}
+
+
 def find_terminal() -> Path | None:
     return next((p for p in terminal_candidates() if p.exists()), None)
 
@@ -79,7 +102,7 @@ def running_process_names() -> set[str]:
 
 
 def any_target_game_running() -> bool:
-    return bool(running_process_names() & {n.lower() for n in TARGET_GAMES})
+    return bool(running_process_names() & load_games())
 
 
 def start_discord() -> bool:
@@ -125,8 +148,11 @@ def start_terminal(path: Path):
 def main():
     last_launch = 0.0
     discord_game_was_running = False
+    games, games_loaded = load_games(), time.time()
     while True:
         try:
+            if time.time() - games_loaded > CONFIG_REFRESH_SECONDS:
+                games, games_loaded = load_games(), time.time()
             names = running_process_names()
 
             # Discord: nur beim Übergang "Dota aus → Dota an", damit ein bewusst
@@ -136,7 +162,7 @@ def main():
                 start_discord()
             discord_game_was_running = discord_game
 
-            if names & {n.lower() for n in TARGET_GAMES}:
+            if names & games:
                 now = time.time()
                 terminal = find_terminal()
                 if terminal and not terminal_already_running() and (now - last_launch) >= COOLDOWN_SECONDS:

@@ -78,6 +78,8 @@ und auf jedem PC automatisch bereitgestellt – auch ohne Google Drive.
 
 `waechter/skadi_waechter.pyw` läuft unsichtbar im Hintergrund und startet SkadiTerminal,
 sobald `dota2.exe` (oder CS2 & Co.) läuft. SkadiTerminal schließt sich 3 Minuten nach Spielende selbst.
+Welche Spiele zählen, steht in **Konfiguration → Spiele-Liste bearbeiten** (gespeichert in `skadi_config.json`);
+der Wächter liest dieselbe Liste alle 30 s neu. Dieselbe Liste schließt `Bild↑ + Bild↓` / „✕ Spiele“.
 Startet Dota, öffnet der Wächter außerdem **Discord** (falls nicht schon offen) – einmal pro Spielsitzung;
 abschalten: in `skadi_waechter.pyw` `DISCORD_WITH_GAMES = set()`.
 
