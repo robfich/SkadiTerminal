@@ -21,6 +21,17 @@ Phase D erkennt den Doppel-Pick über
 Prüfdauer einstellbar unter *Zeiten & Hotkey → Prüfdauer* (Standard 60 s),
 an/aus über den Button „Doppel-Check“ im Pick-Tab.
 
+## Testen
+
+1. **Erkennung testen** (Tab Konfiguration): prüft alle Templates gegen den aktuellen Bildschirm
+   und zeigt die Trefferwerte (ab 0,65 gilt als gefunden).
+2. **🧪 Doppel-Pick-Erkennung testen**: startet nur Phase D – ohne zu klicken oder zu tippen.
+   Erst den PLANUNG-Bildschirm zeigen, dann zur Heldenauswahl (Suchfeld) wechseln.
+   Nach ca. 1–2 s muss „✔ Doppel-Pick ERKANNT“ in der Statuszeile stehen.
+   Geht auch ohne Dota: eigene Debug-Screenshots (`debug_*_planung.png`, dann einen mit Heldenauswahl)
+   nacheinander im Vollbild bei 100 % öffnen.
+3. Normales Spiel (gern Lobby mit Bots): Ablauf A → B → C → D in der Statuszeile verfolgen.
+
 ## Bauen
 
 ```bat

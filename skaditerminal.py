@@ -967,6 +967,7 @@ class SkadiTerminalApp:
             ("📍 Koordinaten kalibrieren (F8)", self.start_calibration),
             ("📷 Bild-Templates erfassen",       self.open_image_calib_dialog),
             ("🔍 Erkennung testen",              self.test_image_recognition),
+            ("🧪 Doppel-Pick-Erkennung testen",   self.test_doppel_check),
             ("🛒 Item-Sets verwalten",           self.open_item_set_editor),
             ("⏱ Zeiten & Hotkey",               self.open_timing_config),
             ("🎯 Held-Pool verwalten",            self.open_hero_pool_manager),
@@ -2343,6 +2344,40 @@ class SkadiTerminalApp:
         ry = self.root.winfo_y() + self.root.winfo_height()//2 - 260
         win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
 
+    def test_doppel_check(self):
+        """
+        Startet nur Phase D (ohne Klicken/Tippen), damit man die
+        Doppel-Pick-Erkennung gefahrlos ausprobieren kann:
+        PLANUNG-Bildschirm zeigen → dann zurück zur Heldenauswahl wechseln.
+        Abbruch mit BACKSPACE.
+        """
+        if not CV2_AVAILABLE:
+            self.status_var.set("opencv nicht installiert — pip install opencv-python mss")
+            return
+        if self.pick_thread and self.pick_thread.is_alive():
+            self.status_var.set("Pick-Macro läuft gerade — erst stoppen (BACKSPACE).")
+            return
+        if not (DOPPELT_TEMPLATE_PATH.exists() or
+                (FIELD_TEMPLATE_PATH.exists() and PLANUNG_TEMPLATE_PATH.exists())):
+            self.status_var.set("Für den Test fehlen Templates: Suchfeld + PLANUNG (oder Doppel-Pick).")
+            return
+
+        def _run():
+            try:
+                found = self._phase_d_duplicate_watch("TEST", use_img=True, force=True)
+                if found:
+                    self._ui_status("🧪 TEST: ✔ Doppel-Pick ERKANNT — im echten Ablauf würde jetzt neu gepickt.")
+                elif self.stop_pick.is_set():
+                    self._ui_status("🧪 TEST: abgebrochen.")
+                else:
+                    self._ui_status("🧪 TEST: kein Doppel-Pick erkannt (Zeit abgelaufen).")
+            finally:
+                _release_screen()
+
+        self.stop_pick.clear()
+        self.pick_thread = threading.Thread(target=_run, daemon=True)
+        self.pick_thread.start()
+
     def test_image_recognition(self):
         """
         Testet beide Templates auf dem aktuellen Bildschirm,
@@ -3004,7 +3039,7 @@ class SkadiTerminalApp:
         return True
 
     # ── Phase D ───────────────────────────────────────────────────────
-    def _phase_d_duplicate_watch(self, hero: str, use_img: bool) -> bool:
+    def _phase_d_duplicate_watch(self, hero: str, use_img: bool, force: bool = False) -> bool:
         """
         Beobachtet nach dem Pick den Bildschirm, ob unser Held auch vom
         Gegnerteam genommen wurde (Doppel-Pick → Pick wird zurückgesetzt).
@@ -3016,7 +3051,7 @@ class SkadiTerminalApp:
 
         Rückgabe: True = Doppel-Pick erkannt → neu picken.
         """
-        if not self.cfg.get("doppel_check_enabled", True) or not use_img:
+        if not use_img or not (force or self.cfg.get("doppel_check_enabled", True)):
             return False
         has_doppelt = DOPPELT_TEMPLATE_PATH.exists()
         has_field   = FIELD_TEMPLATE_PATH.exists() and PLANUNG_TEMPLATE_PATH.exists()
