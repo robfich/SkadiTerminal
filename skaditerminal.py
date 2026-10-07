@@ -47,6 +47,8 @@ if getattr(sys, "frozen", False):
 else:
     _BASE_DIR = Path(__file__).parent
 
+_BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", _BASE_DIR))   # in die EXE gepackte Dateien
+
 APP_NAME       = "SkadiTerminal"
 _PREFIX        = "skadi"
 _LEGACY_PREFIX = "gterminal"      # alter Name (Gterminal) — wird migriert
@@ -122,7 +124,19 @@ def _migrate_legacy_files():
                     _GDRIVE / GDRIVE_PROJECT_DIR / "gterminal26"]
     if os.environ.get("LOCALAPPDATA"):
         sources.append(Path(os.environ["LOCALAPPDATA"]) / "Gterminal")
+    # Mitgelieferte Templates aus dem Repo (in die EXE eingebaut bzw. neben dem Skript)
+    sources += [_BUNDLE_DIR / "templates", _BASE_DIR / "templates"]
+    meta_path = DATA_DIR / f"{_PREFIX}_templates.json"
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        meta = {}
+    meta_changed = False
     for d in sources:
+        try:
+            src_meta = json.loads((d / f"{_PREFIX}_templates.json").read_text(encoding="utf-8"))
+        except Exception:
+            src_meta = {}
         try:
             files = [f for f in d.iterdir() if f.is_file()
                      and f.name.startswith((_LEGACY_PREFIX + "_", _PREFIX + "_"))
@@ -133,12 +147,20 @@ def _migrate_legacy_files():
             name = (_PREFIX + f.name[len(_LEGACY_PREFIX):]
                     if f.name.startswith(_LEGACY_PREFIX + "_") else f.name)
             target = DATA_DIR / name
-            if target.exists() or target == f:
+            if target.exists() or target == f or name == meta_path.name:
                 continue
             try:
                 shutil.copy2(f, target)
+                if name in src_meta and name not in meta:
+                    meta[name] = src_meta[name]
+                    meta_changed = True
             except OSError:
                 pass
+    if meta_changed:
+        try:
+            meta_path.write_text(json.dumps(meta, indent=1), encoding="utf-8")
+        except OSError:
+            pass
 
 _migrate_legacy_files()
 
@@ -147,7 +169,6 @@ AUSWAHL_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_auswahl.png"
 PLANUNG_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_planung.png"
 NEUTRAL_POS_PATH     = DATA_DIR / f"{_PREFIX}_neutral.png"
 DOPPELT_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_doppelt.png"
-_BUNDLE_DIR          = Path(getattr(sys, "_MEIPASS", _BASE_DIR))   # in die EXE gepackte Dateien
 ICON_PATH            = next((p for p in (_BASE_DIR / "skaditerminal.ico",
                                          _BUNDLE_DIR / "skaditerminal.ico",
                                          _BASE_DIR / "germinallogo.ico") if p.exists()),
@@ -161,6 +182,25 @@ def _get_config_path() -> Path:
     return DATA_DIR / f"{_PREFIX}_config.json"
 
 CONFIG_PATH = _get_config_path()
+
+# Pro Template: Bildschirmauflösung bei der Aufnahme → daraus wird skaliert
+TEMPLATE_META_PATH = DATA_DIR / f"{_PREFIX}_templates.json"
+_meta_lock = threading.Lock()
+
+def load_template_meta() -> dict:
+    try:
+        return json.loads(TEMPLATE_META_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def set_template_meta(name: str, size: tuple[int, int]):
+    with _meta_lock:
+        meta = load_template_meta()
+        meta[name] = [int(size[0]), int(size[1])]
+        try:
+            TEMPLATE_META_PATH.write_text(json.dumps(meta, indent=1), encoding="utf-8")
+        except OSError:
+            pass
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Prozesse
@@ -630,23 +670,31 @@ def _apply_resolution(width: int, height: int, hz: int) -> bool:
 # Bilderkennung: Template-Cache + Screenshot pro Thread
 # ──────────────────────────────────────────────────────────────────────────────
 class _TemplateCache:
-    """Lädt Templates einmal (Graustufen) und lädt neu, wenn die Datei sich ändert."""
+    """
+    Lädt Templates einmal (Graustufen) und hält skalierte Varianten vor.
+    Ändert sich die Datei, wird neu geladen.
+    """
     def __init__(self):
-        self._cache: dict[Path, tuple[float, object]] = {}
+        self._cache: dict[tuple[Path, float], tuple[float, object]] = {}
         self._lock = threading.Lock()
 
-    def get(self, path: Path):
+    def get(self, path: Path, scale: float = 1.0):
         try:
             mtime = path.stat().st_mtime
         except OSError:
             return None
+        key = (path, round(scale, 3))
         with self._lock:
-            hit = self._cache.get(path)
+            hit = self._cache.get(key)
         if hit and hit[0] == mtime:
             return hit[1]
         img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if img is not None and abs(scale - 1.0) > 0.001:
+            h, w = img.shape
+            size = (max(4, round(w * scale)), max(4, round(h * scale)))
+            img = cv2.resize(img, size, interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC)
         with self._lock:
-            self._cache[path] = (mtime, img)
+            self._cache[key] = (mtime, img)
         return img
 
 _TEMPLATES = _TemplateCache()
@@ -704,6 +752,8 @@ class SkadiTerminalApp:
         self.calibrating  = False
         self.calib_points: list[tuple[int,int]] = []
         self.calib_lock   = threading.Lock()
+        self._last_sweep: dict[Path, float] = {}
+        self._last_match  = (0.0, 1.0)
         self.status_var   = tk.StringVar(value=f"Bereit.  Config: {CONFIG_PATH.name}")
         self.theme_btn = None
         self.font_btn  = None
@@ -1027,6 +1077,7 @@ class SkadiTerminalApp:
             ("Erkennung testen",             self.test_image_recognition),
             ("Doppel-Pick-Test",             self.test_doppel_check),
             ("Koordinaten kalibrieren (F8)", self.start_calibration),
+            ("Skalierung neu lernen",        self.reset_learned_scales),
         ])
 
         cfg_header("PICK & ITEMS")
@@ -2394,6 +2445,12 @@ class SkadiTerminalApp:
         ry = self.root.winfo_y() + self.root.winfo_height()//2 - 260
         win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
 
+    def reset_learned_scales(self):
+        self.cfg["learned_scales"] = {}
+        self._last_sweep.clear()
+        save_config(self.cfg)
+        self.status_var.set("Gelernte Skalierungen gelöscht — werden beim nächsten Pick neu ermittelt.")
+
     def import_templates(self):
         """
         Holt Templates (gterminal_*/skadi_*.png) und optional die alte Config aus
@@ -2527,38 +2584,21 @@ class SkadiTerminalApp:
                     (DOPPELT_TEMPLATE_PATH, "Doppel-Pick"),
                 ):
                     if not tpath.exists():
-                        results.append(f"{label}: ✗ Template fehlt")
+                        results.append(f"{label}: ✗ fehlt")
                         continue
-
-                    tmpl = cv2.imread(str(tpath), cv2.IMREAD_GRAYSCALE)
-                    if tmpl is None:
-                        results.append(f"{label}: ✗ Template nicht lesbar")
-                        continue
-
-                    sh, sw = screen_g.shape
-                    th, tw = tmpl.shape
-                    if th > sh or tw > sw:
-                        results.append(f"{label}: ✗ Template ({tw}×{th}) > Screen ({sw}×{sh})")
-                        continue
-
-                    res = cv2.matchTemplate(screen_g, tmpl, cv2.TM_CCOEFF_NORMED)
-                    _, mv, _, ml = cv2.minMaxLoc(res)
-
-                    if mv >= 0.65:
-                        # Treffer einzeichnen
-                        cx = ml[0] + tw // 2
-                        cy = ml[1] + th // 2
-                        cv2.rectangle(debug_img,
-                                      (ml[0], ml[1]),
-                                      (ml[0] + tw, ml[1] + th),
-                                      (0, 255, 0), 3)
-                        cv2.putText(debug_img, f"{label} {mv:.2f}",
-                                    (ml[0], ml[1] - 8),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8,
-                                    (0, 255, 0), 2)
-                        results.append(f"{label}: ✔ {mv:.2f}  @  ({cx},{cy})")
+                    self._last_sweep.pop(tpath, None)          # Test = immer volle Suche
+                    pos = self._find_on_screen(tpath, 0.65, screen=screen_g, report=False)
+                    mv, sc = self._last_match
+                    if pos:
+                        tmpl = _TEMPLATES.get(tpath, sc)
+                        th, tw = tmpl.shape
+                        x0, y0 = pos[0] - tw // 2, pos[1] - th // 2
+                        cv2.rectangle(debug_img, (x0, y0), (x0 + tw, y0 + th), (0, 255, 0), 3)
+                        cv2.putText(debug_img, f"{label} {mv:.2f} x{sc:.2f}", (x0, y0 - 8),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        results.append(f"{label}: ✔ {mv:.2f} ×{sc:.2f}")
                     else:
-                        results.append(f"{label}: ✗ {mv:.2f}  (zu niedrig, min 0.65)")
+                        results.append(f"{label}: ✗ {mv:.2f}")
 
                 # Screen-Info hinzufügen
                 sh, sw = screen_g.shape
@@ -2586,42 +2626,91 @@ class SkadiTerminalApp:
         self.status_var.set("Teste Bilderkennung...")
         threading.Thread(target=_run, daemon=True).start()
 
+    # Feste Skalierungen, die zusätzlich probiert werden (gängige Auflösungswechsel)
+    _SCALE_SWEEP = (1.0, 0.75, 1.3333, 0.9, 1.1111, 0.8, 1.25, 1.2, 0.8333, 1.125, 0.6667, 1.5)
+
+    def _scale_candidates(self, template_path: Path, sw: int, sh: int) -> tuple[float | None, list[float]]:
+        """
+        (gelernte Skalierung, Kandidatenliste) für dieses Template bei Bildschirm sw×sh.
+        Basis: Bildschirmhöhe jetzt / Bildschirmhöhe bei der Aufnahme (Dota skaliert
+        die Oberfläche mit der Höhe). Unbekannte Aufnahme-Auflösung = Spielauflösung aus der Config.
+        """
+        learned = self.cfg.get("learned_scales", {}).get(f"{sw}x{sh}", {}).get(template_path.name)
+        cap = load_template_meta().get(template_path.name) or self.cfg.get("game_res", [1920, 1200])
+        base = sh / max(1, cap[1])
+        cands = ([learned] if learned else []) + [base] + [base * f for f in (0.97, 1.03, 0.94, 1.06)]
+        cands += list(self._SCALE_SWEEP)
+        seen, out = set(), []
+        for c in cands:
+            k = round(c, 3)
+            if 0.4 <= k <= 2.5 and k not in seen:
+                seen.add(k)
+                out.append(c)
+        return learned, out
+
+    def _remember_scale(self, template_path: Path, sw: int, sh: int, scale: float):
+        per_res = self.cfg.setdefault("learned_scales", {}).setdefault(f"{sw}x{sh}", {})
+        if per_res.get(template_path.name) != round(scale, 4):
+            per_res[template_path.name] = round(scale, 4)
+            try:
+                save_config(self.cfg)
+            except Exception:
+                pass
+
     def _find_on_screen(self, template_path: Path, confidence: float = 0.70,
                         screen=None, report: bool = True):
         """
-        Template-Match auf dem Bildschirm (native Auflösung, keine Skalierung).
-        Template und Screenshot müssen in derselben Auflösung aufgenommen worden sein.
+        Template-Match auf dem Bildschirm — unabhängig von der Auflösung:
+        Das Template wird passend skaliert. Die erste Skalierung, die trifft, wird
+        pro Bildschirmauflösung gemerkt; danach wird nur noch diese probiert.
 
         screen: optional ein bereits aufgenommener Graustufen-Screenshot, damit
                 mehrere Templates gegen denselben Frame geprüft werden können.
         report: Match-Score in der Statuszeile anzeigen.
+        Ergebnis des letzten Versuchs (Score, Skalierung) steht in self._last_match.
         """
-        if not CV2_AVAILABLE:
-            return None
-        template = _TEMPLATES.get(template_path)
-        if template is None:
+        if not CV2_AVAILABLE or _TEMPLATES.get(template_path) is None:
             return None
         try:
             screen_g = screen if screen is not None else _grab_screen_gray()
             sh, sw = screen_g.shape
-            th, tw = template.shape
+            learned, cands = self._scale_candidates(template_path, sw, sh)
 
-            # Template darf nicht größer als Screenshot sein
-            if th > sh or tw > sw:
-                self._ui_status(
-                    f"⚠ Template {template_path.name} ({tw}×{th}) größer als Screen ({sw}×{sh}) — neu aufnehmen!")
-                return None
+            # Mit gelernter Skalierung nur diese probieren; volle Suche höchstens alle 2 s
+            now = time.monotonic()
+            last = self._last_sweep.get(template_path, 0.0)
+            if learned and now - last < 10.0:
+                cands = cands[:1]
+            elif not learned and now - last < 2.0:
+                cands = cands[:1]
+            else:
+                self._last_sweep[template_path] = now
 
-            result = cv2.matchTemplate(screen_g, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            best = (-1.0, None, 1.0, (0, 0))
+            for scale in cands:
+                template = _TEMPLATES.get(template_path, scale)
+                if template is None:
+                    continue
+                th, tw = template.shape
+                if th > sh or tw > sw:
+                    continue
+                result = cv2.matchTemplate(screen_g, template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                if max_val > best[0]:
+                    best = (max_val, max_loc, scale, (tw, th))
+                if max_val >= confidence:
+                    break
 
+            score, loc, scale, (tw, th) = best
+            self._last_match = (score, scale)
             if report:
                 self._ui_status(
-                    f"Match {template_path.name}: {max_val:.2f}  "
-                    f"{'✔' if max_val >= confidence else f'✗ zu niedrig (min {confidence})'}")
-
-            if max_val >= confidence:
-                return (max_loc[0] + tw // 2, max_loc[1] + th // 2)
+                    f"Match {template_path.name}: {score:.2f} (×{scale:.2f})  "
+                    f"{'✔' if score >= confidence else f'✗ zu niedrig (min {confidence})'}")
+            if loc is not None and score >= confidence:
+                if scale != learned:
+                    self._remember_scale(template_path, sw, sh, scale)
+                return (loc[0] + tw // 2, loc[1] + th // 2)
         except Exception as e:
             self._ui_status(f"Bilderkennung Fehler: {e}")
         return None
@@ -2652,20 +2741,24 @@ class SkadiTerminalApp:
 
     def _capture_template(self, template_path: Path, region_w: int = 200, region_h: int = 80):
         """
-        Screenshot der Maus-Region via mss — KEINE Skalierung.
-        Die Region wird in der aktuellen nativen Bildschirmauflösung gespeichert.
-        Template und spätere Suche müssen in derselben Auflösung sein.
+        Screenshot der Maus-Region via mss in nativer Auflösung. Die Auflösung wird in
+        skadi_templates.json vermerkt, damit die Suche das Bild später passend skaliert.
         """
         import mss
         pos = pyautogui.position()
         x   = max(0, pos.x - region_w // 2)
         y   = max(0, pos.y - region_h // 2)
         with mss.mss() as sct:
+            mon     = sct.monitors[1]
             region  = {"left": x, "top": y, "width": region_w, "height": region_h}
             raw     = sct.grab(region)
             img     = np.array(raw)
             img_bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
             cv2.imwrite(str(template_path), img_bgr)
+        # Aufnahme-Auflösung merken → später auf jede andere Auflösung skalierbar
+        set_template_meta(template_path.name, (mon["width"], mon["height"]))
+        for res in self.cfg.get("learned_scales", {}).values():
+            res.pop(template_path.name, None)                 # neues Bild → neu lernen
         return pos
 
     def open_image_calib_dialog(self):
@@ -2915,6 +3008,15 @@ class SkadiTerminalApp:
     # ──────────────────────────────────────────────────────────────────
     # Pick Macro
     # ──────────────────────────────────────────────────────────────────
+    def _scale_pt(self, pt) -> tuple[int, int]:
+        """Kalibrierten Punkt auf die aktuelle Bildschirmauflösung umrechnen."""
+        ref = self.cfg.get("coords_res") or self.cfg.get("game_res", [1920, 1200])
+        try:
+            cur = pyautogui.size()
+            return (round(pt[0] * cur[0] / ref[0]), round(pt[1] * cur[1] / ref[1]))
+        except Exception:
+            return (int(pt[0]), int(pt[1]))
+
     def _has_coords(self) -> bool:
         pp = self.cfg.get("pick_points")
         fp = self.cfg.get("field_point")
@@ -3024,7 +3126,7 @@ class SkadiTerminalApp:
                     break
                 time.sleep(0.3)
         elif use_coords:
-            pos = tuple(self.cfg["field_point"])
+            pos = self._scale_pt(self.cfg["field_point"])
         else:
             self._ui_status("⚠ Kein Suchfeld-Template — bitte 📷 Bilder kalibrieren.")
             return False
@@ -3050,7 +3152,7 @@ class SkadiTerminalApp:
                 ax, ay = pos
                 return [(ax - 8, ay), (ax, ay), (ax + 8, ay)]
         if use_coords:
-            return [tuple(p) for p in self.cfg["pick_points"]]
+            return [self._scale_pt(p) for p in self.cfg["pick_points"]]
         return None
 
     def _phase_b_pick(self, heroes: list[str], start: int,
@@ -3233,6 +3335,10 @@ class SkadiTerminalApp:
             pts = self.calib_points[:4]; self.calib_points = []
         self.cfg["field_point"]  = list(pts[0])
         self.cfg["pick_points"]  = [list(p) for p in pts[1:4]]
+        try:
+            self.cfg["coords_res"] = list(pyautogui.size())
+        except Exception:
+            pass
         save_config(self.cfg)
         self.calibrating = False
         self.status_var.set(f"Kalibrierung fertig.  Feld={pts[0]}  Pick={self.cfg['pick_points']}")

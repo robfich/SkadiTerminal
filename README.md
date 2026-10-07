@@ -61,8 +61,12 @@ Beim ersten Start holt es fehlende Dateien automatisch aus `Dota2_Draft_Helfer_M
 Anderer Ordner gewünscht? Eine Textdatei `skadi_datenordner.txt` mit dem Pfad neben die EXE legen.
 Ohne Google Drive wird der Ordner der EXE benutzt.
 
-**Hinweis:** Templates passen nur zur Auflösung, in der sie aufgenommen wurden.
-Hat ein anderer PC eine andere Spielauflösung, dort einmal neu aufnehmen.
+**Andere Auflösung / anderer PC:** Die Templates werden beim Suchen automatisch skaliert
+(getestet von 1680×1050 bis 3840×2400). Die passende Skalierung wird pro Auflösung gelernt;
+zurücksetzen über *Konfiguration → Skalierung neu lernen*.
+
+**Templates im Repo:** Bilder im Ordner [`templates/`](templates/) werden in die EXE eingebaut
+und auf jedem PC automatisch bereitgestellt – auch ohne Google Drive.
 
 ## Bauen
 
