@@ -2,8 +2,10 @@
 SkadiTerminal-Wächter
 Läuft unsichtbar im Hintergrund (Autostart) und startet SkadiTerminal,
 sobald Dota 2 (oder ein anderes Spiel aus TARGET_GAMES) läuft.
+Startet außerdem Discord, wenn Dota 2 startet (einmal pro Spielsitzung).
 SkadiTerminal schließt sich selbst wieder, wenn 3 Minuten kein Spiel mehr läuft.
 """
+import os
 import sys
 import time
 import subprocess
@@ -19,6 +21,10 @@ POLL_SECONDS = 2.0
 
 # Mindest-Abstand zwischen Starts (Sekunden), falls ein Spiel mehrfach kurz startet
 COOLDOWN_SECONDS = 20.0
+
+# Discord mitstarten, wenn eines dieser Spiele startet (leere Menge = aus)
+DISCORD_WITH_GAMES = {"dota2.exe"}
+DISCORD_PROCS      = {"discord.exe", "discordcanary.exe", "discordptb.exe"}
 
 # Prozess-/Dateinamen, an denen ein laufendes Terminal erkannt wird
 TERMINAL_NAMES = ("skaditerminal", "gterminal")
@@ -62,14 +68,33 @@ def find_terminal() -> Path | None:
     return next((p for p in terminal_candidates() if p.exists()), None)
 
 
-def any_target_game_running() -> bool:
-    targets = {n.lower() for n in TARGET_GAMES}
+def running_process_names() -> set[str]:
+    names = set()
     for p in psutil.process_iter(["name"]):
         try:
-            if (p.info["name"] or "").lower() in targets:
-                return True
+            names.add((p.info["name"] or "").lower())
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
+    return names
+
+
+def any_target_game_running() -> bool:
+    return bool(running_process_names() & {n.lower() for n in TARGET_GAMES})
+
+
+def start_discord() -> bool:
+    """Discord über den offiziellen Updater starten (wie der Start-Button in SkadiTerminal)."""
+    for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA")):
+        if not base:
+            continue
+        updater = Path(base) / "Discord" / "Update.exe"
+        if updater.exists():
+            try:
+                subprocess.Popen([str(updater), "--processStart", "Discord.exe"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except OSError:
+                pass
     return False
 
 
@@ -98,9 +123,19 @@ def start_terminal(path: Path):
 
 def main():
     last_launch = 0.0
+    discord_game_was_running = False
     while True:
         try:
-            if any_target_game_running():
+            names = running_process_names()
+
+            # Discord: nur beim Übergang "Dota aus → Dota an", damit ein bewusst
+            # geschlossenes Discord nicht ständig wieder aufgeht
+            discord_game = bool(names & DISCORD_WITH_GAMES)
+            if discord_game and not discord_game_was_running and not (names & DISCORD_PROCS):
+                start_discord()
+            discord_game_was_running = discord_game
+
+            if names & {n.lower() for n in TARGET_GAMES}:
                 now = time.time()
                 terminal = find_terminal()
                 if terminal and not terminal_already_running() and (now - last_launch) >= COOLDOWN_SECONDS:
