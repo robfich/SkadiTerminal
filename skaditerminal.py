@@ -8,7 +8,7 @@ import shutil
 import copy
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import tkinter.font as tkfont
 
 import ctypes
@@ -959,7 +959,17 @@ class SkadiTerminalApp:
             self._cfg_mode_label.config(text="\n".join(lines))
 
         _update_cfg_mode_label()
+        self._update_cfg_mode_label = _update_cfg_mode_label
         nb.bind("<<NotebookTabChanged>>", lambda e: (_update_cfg_mode_label(), self._fit_window()))
+
+        tk.Label(tab_cfg, text=f"Programmordner: {_BASE_DIR}", bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="w", justify="left", wraplength=420
+                 ).grid(row=cfg_row, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+        cfg_row += 1
+        cfg_buttons([
+            ("Alte Templates importieren …", self.import_templates),
+            ("Programmordner öffnen",        lambda: open_folder(str(_BASE_DIR))),
+        ])
 
         # ── AUFLÖSUNG (immer sichtbar) ────────────────────────────────
         res = self._section(main, "AUFLÖSUNG", row=3)
@@ -2288,6 +2298,76 @@ class SkadiTerminalApp:
         rx = self.root.winfo_x() + self.root.winfo_width()//2  - 210
         ry = self.root.winfo_y() + self.root.winfo_height()//2 - 260
         win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
+
+    def import_templates(self):
+        """
+        Holt Templates (gterminal_*/skadi_*.png) und optional die alte Config aus
+        einem anderen Ordner — z. B. dem früheren Gterminal-Ordner im Google Drive.
+        """
+        src = filedialog.askdirectory(parent=self.root,
+                                      title="Ordner mit den alten Templates wählen (z. B. Dota2_Draft_Helfer_Maerz)")
+        if not src:
+            return
+        src = Path(src)
+        if src.resolve() == _BASE_DIR.resolve():
+            self.status_var.set("Das ist bereits der Programmordner.")
+            return
+
+        def _new_name(name: str) -> str:
+            return _PREFIX + name[len(_LEGACY_PREFIX):] if name.startswith(_LEGACY_PREFIX + "_") else name
+
+        files = [f for f in src.iterdir() if f.is_file()
+                 and f.name.startswith((_LEGACY_PREFIX + "_", _PREFIX + "_"))
+                 and "_debug" not in f.name]
+        pngs  = [f for f in files if f.suffix.lower() == ".png"]
+        cfgs  = sorted((f for f in files if f.name.endswith("_config.json")),
+                       key=lambda f: not f.name.startswith(_PREFIX))   # skadi_ vor gterminal_
+        if not pngs and not cfgs:
+            self.status_var.set(f"Keine gterminal_*/skadi_*-Dateien in {src.name} gefunden.")
+            return
+
+        overwrite = True
+        if any((_BASE_DIR / _new_name(f.name)).exists() for f in pngs):
+            overwrite = messagebox.askyesno("Templates ersetzen?",
+                                            "Einige Templates gibt es hier schon.\nMit den importierten ersetzen?",
+                                            parent=self.root)
+        copied = 0
+        for f in pngs:
+            target = _BASE_DIR / _new_name(f.name)
+            if target.exists() and not overwrite:
+                continue
+            try:
+                shutil.copy2(f, target)
+                copied += 1
+            except OSError:
+                pass
+
+        cfg_msg = ""
+        if cfgs and messagebox.askyesno(
+                "Einstellungen übernehmen?",
+                f"In {src.name} liegt auch eine Config ({cfgs[0].name}).\n\n"
+                "Presets, Item-Sets, Held-Pool und Zeiten übernehmen?\n"
+                "(Die aktuellen Einstellungen werden ersetzt.)", parent=self.root):
+            try:
+                shutil.copy2(cfgs[0], CONFIG_PATH)
+                self.cfg = load_config()
+                self.cfg["dark_mode"]  = self._dark_mode       # Anzeige so lassen wie gerade
+                self.cfg["font_large"] = self._font_large
+                save_config(self.cfg)
+                self._mode_var.set(self.cfg.get("pick_mode", "both"))
+                self._refresh_mode_buttons()
+                self._rebuild_hero_grid()
+                self._rebuild_preset_buttons()
+                self._refresh_item_set_btns()
+                self._update_onoff_btn()
+                self._update_hotkey_hint()
+                cfg_msg = " + Einstellungen"
+            except Exception as e:
+                cfg_msg = f" (Config-Fehler: {e})"
+
+        self._update_cfg_mode_label()
+        self._fit_window()
+        self.status_var.set(f"✔ {copied} Templates{cfg_msg} aus '{src.name}' importiert.")
 
     def test_doppel_check(self):
         """
