@@ -571,33 +571,38 @@ def open_folder(path_str: str) -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 # Farb-Paletten
 # ──────────────────────────────────────────────────────────────────────────────
-PAL_DARK = {
-    "bg":"#101217","surface":"#181b22","surface2":"#1f232c",
-    "accent":"#e5484d","on_accent":"#ffffff","text":"#e9ebf1","text_dim":"#8a91a3",
+# Design "Schlicht": neutrale Grautöne, Windows-Blau als einzige Akzentfarbe.
+# Rot nur für "beenden"-Knöpfe und Fehler, Grün/Gelb nur für Status.
+# Die Attributfarben (Stärke/Beweglichkeit/Intelligenz/Universal) bleiben, weil sie in Dota Bedeutung haben.
+PAL_DARK = {        # "Schwarz"
+    "bg":"#000000","surface":"#141414","surface2":"#1b1b1b",
+    "accent":"#2b7cd3","accent_hover":"#4590e0","on_accent":"#ffffff",
+    "text":"#f2f2f2","text_dim":"#9b9b9b",
     "str_col":"#f2777a","agi_col":"#5fd38d","int_col":"#6eaaf5","uni_col":"#c792ea",
-    "btn_bg":"#242833","hover":"#2f3442","separator":"#2a2e39",
-    "success":"#2a9d62","danger":"#e5484d","input_bg":"#1f232c",
+    "btn_bg":"#222222","hover":"#2e2e2e","separator":"#2a2a2a",
+    "success":"#3ca55c","warn":"#d6a21e","danger":"#e05252","input_bg":"#222222",
 }
-# Mittelweg (ähnlich Discord): dunkelgrau statt schwarz, Schrift hell und kräftig
-PAL_GRAY = {
-    "bg":"#2b2d31","surface":"#34373d","surface2":"#3c3f46",
-    "accent":"#f05a68","on_accent":"#ffffff","text":"#eceef1","text_dim":"#b3b8c1",
+PAL_GRAY = {        # "Grau" (Standard): dunkel, aber nicht schwarz
+    "bg":"#202020","surface":"#2b2b2b","surface2":"#303030",
+    "accent":"#2b7cd3","accent_hover":"#4590e0","on_accent":"#ffffff",
+    "text":"#f0f0f0","text_dim":"#a8a8a8",
     "str_col":"#ff8f8f","agi_col":"#6fe0a0","int_col":"#86bdff","uni_col":"#d7a8ff",
-    "btn_bg":"#41454d","hover":"#4c5059","separator":"#464a52",
-    "success":"#2f9e64","danger":"#f05a68","input_bg":"#2f3237",
+    "btn_bg":"#383838","hover":"#444444","separator":"#3a3a3a",
+    "success":"#3ca55c","warn":"#d6a21e","danger":"#ff6b6b","input_bg":"#333333",
 }
-# Hell, aber ohne reines Weiß (blendet weniger)
-PAL_LIGHT = {
-    "bg":"#d7dbe3","surface":"#e7e9ef","surface2":"#d0d4de",
-    "accent":"#c72a40","on_accent":"#ffffff","text":"#14161b","text_dim":"#4f5563",
-    "str_col":"#a81f1f","agi_col":"#146b40","int_col":"#1a55ad","uni_col":"#6d33a3",
-    "btn_bg":"#d6dae3","hover":"#c8cdd8","separator":"#c4c9d4",
-    "success":"#1d7d4b","danger":"#c72a40","input_bg":"#f0f1f5",
+PAL_LIGHT = {       # "Hell" (Windows-Grau), Karten bewusst nicht reinweiß
+    "bg":"#f0f0f0","surface":"#f7f7f7","surface2":"#ebebeb",
+    "accent":"#0078d4","accent_hover":"#106ebe","on_accent":"#ffffff",
+    "text":"#1b1b1b","text_dim":"#5e5e5e",
+    "str_col":"#b42323","agi_col":"#18794a","int_col":"#1d5fbf","uni_col":"#7a3db0",
+    "btn_bg":"#e5e5e5","hover":"#dadada","separator":"#d0d0d0",
+    "success":"#107c10","warn":"#9d5d00","danger":"#c42b1c","input_bg":"#ffffff",
 }
 THEMES      = {"hell": PAL_LIGHT, "grau": PAL_GRAY, "dunkel": PAL_DARK}
 THEME_ORDER = ["hell", "grau", "dunkel"]
 THEME_ICON  = {"hell": "☀", "grau": "☁", "dunkel": "☾"}
-THEME_NAME  = {"hell": "Hell", "grau": "Grau", "dunkel": "Dunkel"}
+THEME_NAME  = {"hell": "Hell", "grau": "Grau", "dunkel": "Schwarz"}
+THEME_IS_DARK = [True]      # aktueller Zustand für neue Fenster (Titelleiste)
 PAL: dict[str, str] = dict(PAL_LIGHT)
 
 ATTR_ORDER  = ["Strength","Agility","Intelligence","Universal"]
@@ -612,16 +617,16 @@ MODE_LABELS = {"image": "Bild", "coords": "Koord.", "both": "Beides"}
 # Schriften: (Familie, Basisgröße in pt, Gewicht). "Groß" skaliert alles um 20 %.
 FONT_SPECS = {
     "ui":         ("Segoe UI", 9, "normal"),
-    "ui_bold":    ("Segoe UI", 9, "bold"),
+    "ui_bold":    ("Segoe UI Semibold", 9, "normal"),
     "mono":       ("Consolas", 9, "normal"),
-    "title":      ("Segoe UI", 11, "bold"),
-    "section":    ("Segoe UI", 8, "bold"),
+    "title":      ("Segoe UI Semibold", 11, "normal"),
+    "section":    ("Segoe UI Semibold", 8, "normal"),
     "small":      ("Segoe UI", 8, "normal"),
-    "small_bold": ("Segoe UI", 8, "bold"),
+    "small_bold": ("Segoe UI Semibold", 8, "normal"),
     "hero":       ("Consolas", 9, "normal"),
     "hero_bold":  ("Consolas", 9, "bold"),
     "status":     ("Segoe UI", 8, "normal"),
-    "big_bold":   ("Segoe UI", 9, "bold"),
+    "big_bold":   ("Segoe UI Semibold", 9, "normal"),
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -654,6 +659,20 @@ def _pynput_matches(key, key_str: str) -> bool:
     if hasattr(key,"name") and key.name==key_str: return True
     if hasattr(key,"char") and key.char and key.char.lower()==key_str: return True
     return False
+
+def set_titlebar_dark(window, dark: bool):
+    """Windows 10/11: Titelleiste hell/dunkel schalten (DWMWA_USE_IMMERSIVE_DARK_MODE)."""
+    try:
+        window.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        value = ctypes.c_int(1 if dark else 0)
+        for attr in (20, 19):      # 20 = Win11/neuere Win10, 19 = ältere Win10-Builds
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)) == 0:
+                break
+    except Exception:
+        pass
+
 
 def _apply_icon(window):
     try:
@@ -793,6 +812,7 @@ class SkadiTerminalApp:
             self._theme = "grau"
         self._font_large: bool = self.cfg.get("font_large", False)
         PAL.update(THEMES[self._theme])
+        THEME_IS_DARK[0] = self._theme != "hell"
         self._sync_attr_colors()
         self.root.configure(bg=PAL["bg"])
 
@@ -875,7 +895,7 @@ class SkadiTerminalApp:
             ("✕ Steam+Disc.",    self.kill_steam_discord, False),
             ("✕ Spiele",          self.kill_games,         True),
         ]):
-            self._btn(apps, txt, cmd, accent=acc).grid(row=1, column=col, sticky="ew", pady=(4, 0),
+            self._btn(apps, txt, cmd, danger=acc).grid(row=1, column=col, sticky="ew", pady=(4, 0),
                                                       padx=(0 if col == 0 else 2, 0 if col == 3 else 2))
 
         # ── HELDEN-PICK (Notebook) ────────────────────────────────────
@@ -967,10 +987,11 @@ class SkadiTerminalApp:
             for btn, key, label in ((self._onoff_btn,  "item_phase_enabled",   "Items kaufen"),
                                     (self._doppel_btn, "doppel_check_enabled", "Doppel-Check")):
                 on = self.cfg.get(key, True)
-                btn.config(text=f"{'✔' if on else '✕'}  {label}",
-                           bg=PAL["success"] if on else PAL["btn_bg"],
+                btn.config(text=f"{'✓' if on else '–'}  {label}",
+                           bg=PAL["accent"] if on else PAL["btn_bg"],
                            fg=PAL["on_accent"] if on else PAL["text_dim"],
-                           activebackground=PAL["success"], activeforeground=PAL["on_accent"])
+                           activebackground=PAL["accent_hover"] if on else PAL["hover"],
+                           activeforeground=PAL["on_accent"] if on else PAL["text"])
             self._item_phase_var.set(self.cfg.get("item_phase_enabled", True))
         _update_toggles()
         self._update_onoff_btn = _update_toggles
@@ -1096,7 +1117,7 @@ class SkadiTerminalApp:
         auto.columnconfigure((0, 1, 2), weight=1, uniform="auto")
         self._btn(auto, "Enter alle 5 s",   self.start_enter).grid(row=0, column=0, sticky="ew", padx=(0, 2))
         self._btn(auto, "Taste 4 alle 5 s", self.start_four ).grid(row=0, column=1, sticky="ew", padx=2)
-        self._btn(auto, "■  STOP", self.stop_all_macros, accent=True
+        self._btn(auto, "■  STOP", self.stop_all_macros, danger=True
                   ).grid(row=0, column=2, sticky="ew", padx=(2, 0))
         cfg_row += 1
 
@@ -1219,30 +1240,57 @@ class SkadiTerminalApp:
         self._refresh_res_display()
 
         # ── Statusleiste ──────────────────────────────────────────────
-        status_bar = tk.Frame(self.root, bg=PAL["surface2"])
+        status_bar = tk.Frame(self.root, bg=PAL["surface"])
         status_bar.grid(row=1, column=0, sticky="ew")
         status_bar.columnconfigure(0, weight=1)
-        tk.Label(status_bar, textvariable=self.status_var,
-                 bg=PAL["surface2"], fg=PAL["text"],
-                 font=self._fonts["status"], anchor="w", padx=8, pady=4
-                 ).grid(row=0, column=0, sticky="ew")
+        tk.Frame(status_bar, bg=PAL["separator"], height=1).grid(row=0, column=0, columnspan=4, sticky="ew")
+        status_row = tk.Frame(status_bar, bg=PAL["surface"])
+        status_row.grid(row=1, column=0, sticky="ew")
+        status_row.columnconfigure(1, weight=1)
+        self._status_dot = tk.Label(status_row, text="●", bg=PAL["surface"], fg=PAL["success"],
+                                    font=self._fonts["small"], padx=0)
+        self._status_dot.grid(row=0, column=0, padx=(8, 4))
+        status_lbl = tk.Label(status_row, textvariable=self.status_var,
+                              bg=PAL["surface"], fg=PAL["text_dim"],
+                              font=self._fonts["status"], anchor="w", pady=4)
+        status_lbl.grid(row=0, column=1, sticky="ew")
+
+        def _status_color(*_):
+            m = self.status_var.get()
+            if any(t in m for t in ("✗", "✕", "⚠", "Fehler", "fehlgeschlagen", "Failsafe", "abgebrochen")):
+                c = PAL["danger"]
+            elif any(t in m for t in ("Pick", "Phase", "läuft", "gestartet", "⏸", "Warte", "suche", "Ändere")):
+                c = PAL["warn"]
+            else:
+                c = PAL["success"]
+            try:
+                self._status_dot.config(fg=c)
+            except Exception:
+                pass
+        if getattr(self, "_status_trace", None):
+            try: self.status_var.trace_remove("write", self._status_trace)
+            except Exception: pass
+        self._status_trace = self.status_var.trace_add("write", _status_color)
+        _status_color()
         for col, (txt, cmd) in enumerate((
             (THEME_ICON[self._theme], self.toggle_theme),
             ("A+" if not self._font_large else "A−", self.toggle_font_scale),
-        ), start=1):
-            tk.Button(status_bar, text=txt, command=cmd,
-                      bg=PAL["btn_bg"], fg=PAL["text"],
-                      activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
+        ), start=2):
+            # dezente Knöpfe: Hintergrund wie die Statuszeile, Schrift grau
+            tk.Button(status_row, text=txt, command=cmd,
+                      bg=PAL["surface"], fg=PAL["text_dim"],
+                      activebackground=PAL["hover"], activeforeground=PAL["text"],
                       relief="flat", bd=0, cursor="hand2", width=3,
                       font=self._fonts["ui_bold"], padx=4, pady=1, highlightthickness=0
                       ).grid(row=0, column=col, sticky="e", padx=(0, 4), pady=3)
         # Lange Statusmeldungen umbrechen statt das Fenster zu verbreitern
-        status_bar.bind("<Configure>", lambda e: status_bar.winfo_children()[0].config(
-            wraplength=max(200, e.width - 110)))
+        status_bar.bind("<Configure>", lambda e: status_lbl.config(
+            wraplength=max(200, e.width - 120)))
 
 
     def _rebuild_ui(self):
         """Alle Fenster-Inhalte neu aufbauen — sauberer als Farben umzumappen."""
+        set_titlebar_dark(self.root, THEME_IS_DARK[0])
         tab = getattr(self, "_tab_index", 0)
         preset_open = self._preset_open.get() if hasattr(self, "_preset_open") else False
         for w in self.root.winfo_children():
@@ -1294,16 +1342,22 @@ class SkadiTerminalApp:
         def _enter(e):
             w = e.widget
             try:
-                if w.cget("bg") == PAL["btn_bg"]:
+                bg = w.cget("bg")
+                if bg == PAL["btn_bg"]:
                     w.config(bg=PAL["hover"])
+                elif bg == PAL["accent"]:
+                    w.config(bg=PAL["accent_hover"])
             except Exception:
                 pass
 
         def _leave(e):
             w = e.widget
             try:
-                if w.cget("bg") == PAL["hover"]:
+                bg = w.cget("bg")
+                if bg == PAL["hover"]:
                     w.config(bg=PAL["btn_bg"])
+                elif bg == PAL["accent_hover"]:
+                    w.config(bg=PAL["accent"])
             except Exception:
                 pass
 
@@ -1335,6 +1389,7 @@ class SkadiTerminalApp:
     def toggle_theme(self):
         self._theme = THEME_ORDER[(THEME_ORDER.index(self._theme) + 1) % len(THEME_ORDER)]
         PAL.update(THEMES[self._theme])
+        THEME_IS_DARK[0] = self._theme != "hell"
         self._sync_attr_colors()
         self.cfg["theme"] = self._theme
         save_config(self.cfg)
@@ -1367,7 +1422,7 @@ class SkadiTerminalApp:
         header = tk.Frame(wrapper, bg=PAL["bg"])
         header.grid(row=0, column=0, sticky="ew", pady=(0, 2))
         header.columnconfigure(1, weight=1)
-        tk.Label(header, text=title, bg=PAL["bg"], fg=PAL["accent"],
+        tk.Label(header, text=title, bg=PAL["bg"], fg=PAL["text_dim"],
                  font=self._fonts["section"], anchor="w").grid(row=0, column=0, sticky="w")
         self._last_section_hint = tk.Label(header, text=hint, bg=PAL["bg"], fg=PAL["text_dim"],
                                            font=self._fonts["small"], anchor="e")
@@ -1378,13 +1433,16 @@ class SkadiTerminalApp:
         content.columnconfigure(0, weight=1)
         return content
 
-    def _btn(self, parent, text: str, command, accent: bool = False) -> tk.Button:
+    def _btn(self, parent, text: str, command, accent: bool = False,
+             danger: bool = False) -> tk.Button:
+        """Normaler Knopf; accent = Hauptaktion (blau); danger = beendet etwas (rote Schrift)."""
         return tk.Button(parent, text=text, command=command,
                          bg=PAL["accent"] if accent else PAL["btn_bg"],
-                         fg=PAL["on_accent"] if accent else PAL["text"],
-                         activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
+                         fg=PAL["on_accent"] if accent else (PAL["danger"] if danger else PAL["text"]),
+                         activebackground=PAL["accent_hover"] if accent else PAL["hover"],
+                         activeforeground=PAL["on_accent"] if accent else (PAL["danger"] if danger else PAL["text"]),
                          relief="flat", bd=0, cursor="hand2",
-                         font=self._fonts["ui_bold" if accent else "ui"],
+                         font=self._fonts["ui_bold" if (accent or danger) else "ui"],
                          padx=6, pady=5, highlightthickness=0)
 
     def _small_btn(self, parent, text: str, command) -> tk.Button:
@@ -3580,7 +3638,9 @@ class SkadiTerminalApp:
         self._res_status.config(text=self._res_current_str())
         for mode, btn in self._res_btns.items():
             on = cur == mode
-            btn.config(bg=PAL["success"] if on else PAL["btn_bg"],
+            w, h, hz = mode
+            btn.config(text=f"{'✓  ' if on else ''}{w} × {h} · {hz} Hz",
+                       bg=PAL["accent"] if on else PAL["btn_bg"],
                        fg=PAL["on_accent"] if on else PAL["text"],
                        font=self._fonts["ui_bold" if on else "ui"])
 
@@ -3663,9 +3723,11 @@ def main():
         _orig_init(self, master, **kw)
         try: _apply_icon(self)
         except Exception: pass
+        set_titlebar_dark(self, THEME_IS_DARK[0])
     tk.Toplevel.__init__ = _patched_init
 
     app = SkadiTerminalApp(root)
+    root.after(10, lambda: set_titlebar_dark(root, THEME_IS_DARK[0]))
 
     root.resizable(True, True)
     root.minsize(WIN_W, 500)
