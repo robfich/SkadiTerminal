@@ -55,8 +55,8 @@ timeout /t 2 /nobreak >nul
 copy /Y "dist\SkadiTerminal.exe" "%TARGET%" >nul || goto :fehler
 copy /Y "dist\SkadiWaechter.exe" "%TARGET%" >nul || goto :fehler
 copy /Y "waechter\Autostart_einrichten.bat" "%TARGET%" >nul
-REM Neue Aktualisieren.bat nur ablegen, nicht ueberschreiben (laufende .bat darf sich nicht selbst ersetzen)
-copy /Y "Aktualisieren.bat" "%TARGET%Aktualisieren.neu.bat" >nul
+REM Neue Aktualisieren.bat nur ablegen, wenn sie sich unterscheidet (laufende .bat darf sich nicht selbst ersetzen)
+fc /b "Aktualisieren.bat" "%~f0" >nul 2>nul && (del "%TARGET%Aktualisieren.neu.bat" >nul 2>nul) || (copy /Y "Aktualisieren.bat" "%TARGET%Aktualisieren.neu.bat" >nul & echo  Hinweis: Neue Aktualisieren.bat liegt als Aktualisieren.neu.bat bereit - alte loeschen, neue umbenennen.)
 
 start "" "%TARGET%SkadiWaechter.exe"
 echo.
