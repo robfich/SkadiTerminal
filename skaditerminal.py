@@ -494,18 +494,18 @@ def open_folder(path_str: str) -> bool:
 # Farb-Paletten
 # ──────────────────────────────────────────────────────────────────────────────
 PAL_DARK = {
-    "bg":"#15172a","surface":"#1d2038","surface2":"#262a4a",
-    "accent":"#f0506e","on_accent":"#ffffff","text":"#e6e7f2","text_dim":"#9a9cc0",
-    "str_col":"#f06a6a","agi_col":"#5cd68a","int_col":"#6aa8f0","uni_col":"#c98af0",
-    "btn_bg":"#2b2f52","hover":"#383d68","separator":"#33375c",
-    "success":"#2fa866","danger":"#f0506e","input_bg":"#23264a",
+    "bg":"#101217","surface":"#181b22","surface2":"#1f232c",
+    "accent":"#e5484d","on_accent":"#ffffff","text":"#e9ebf1","text_dim":"#8a91a3",
+    "str_col":"#f2777a","agi_col":"#5fd38d","int_col":"#6eaaf5","uni_col":"#c792ea",
+    "btn_bg":"#242833","hover":"#2f3442","separator":"#2a2e39",
+    "success":"#2a9d62","danger":"#e5484d","input_bg":"#1f232c",
 }
 PAL_LIGHT = {
-    "bg":"#eceef5","surface":"#ffffff","surface2":"#dde1ee",
-    "accent":"#c0143c","on_accent":"#ffffff","text":"#1a1c2e","text_dim":"#5b5e80",
-    "str_col":"#b02020","agi_col":"#17733c","int_col":"#1050b0","uni_col":"#7030a0",
-    "btn_bg":"#e4e7f2","hover":"#cfd4ea","separator":"#c9cee2",
-    "success":"#1e8048","danger":"#c0143c","input_bg":"#f4f6ff",
+    "bg":"#f2f3f7","surface":"#fdfdfe","surface2":"#e8eaf0",
+    "accent":"#d42f45","on_accent":"#ffffff","text":"#16181d","text_dim":"#6b7280",
+    "str_col":"#b42323","agi_col":"#18794a","int_col":"#1d5fbf","uni_col":"#7a3db0",
+    "btn_bg":"#eceef3","hover":"#dfe2ea","separator":"#e2e5ec",
+    "success":"#1f8a52","danger":"#d42f45","input_bg":"#f6f7fa",
 }
 PAL: dict[str, str] = dict(PAL_LIGHT)
 
@@ -709,12 +709,36 @@ class SkadiTerminalApp:
         self.font_btn  = None
 
         self._install_hover()
+        self._build_ui()
+
+        # Hotkey-Listener
+        self.kb_listener = keyboard.Listener(
+            on_press=self._on_global_key_press,
+            on_release=self._on_global_key_release)
+        self.kb_listener.daemon = True
+        self.kb_listener.start()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._update_hotkey_hint()
+
+        # Startup-Preset beim Start automatisch laden
+        sp = self.cfg.get("startup_preset", "")
+        if sp and sp in self.cfg.get("presets", {}):
+            self.root.after(200, lambda: self.load_preset(sp))
+
+        # Auto-Close Timer
+        self._last_game_seen = time.time()
+        self._auto_close_check()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Oberfläche aufbauen (beim Design-Wechsel komplett neu)
+    # ──────────────────────────────────────────────────────────────────
+    def _build_ui(self):
         self._setup_ttk_style()
 
-        root.columnconfigure(0, weight=1)
-        root.rowconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
 
-        main = tk.Frame(root, bg=PAL["bg"], padx=8, pady=6)
+        main = tk.Frame(self.root, bg=PAL["bg"], padx=8, pady=6)
         main.grid(row=0, column=0, sticky="nsew")
         main.columnconfigure(0, weight=1)
         main.rowconfigure(2, weight=1)
@@ -754,16 +778,54 @@ class SkadiTerminalApp:
                                    hint="Ende = Pick starten")
         self._pick_hint_lbl = self._last_section_hint
         pick_outer.configure(padx=0, pady=0)
-        pick_outer.rowconfigure(0, weight=1)
+        pick_outer.rowconfigure(1, weight=1)
 
-        nb = ttk.Notebook(pick_outer, style="GT.TNotebook")
-        nb.grid(row=0, column=0, sticky="nsew")
+        # Eigene Tabs statt ttk.Notebook: jede Seite nur so hoch wie ihr Inhalt
+        tabbar = tk.Frame(pick_outer, bg=PAL["surface"])
+        tabbar.grid(row=0, column=0, sticky="ew")
+        nb = tk.Frame(pick_outer, bg=PAL["surface"])
+        nb.grid(row=1, column=0, sticky="nsew")
+        nb.columnconfigure(0, weight=1)
+        nb.rowconfigure(0, weight=1)
+        self._tab_frames: list[tk.Frame] = []
+        self._tab_btns:   list[tuple[tk.Button, tk.Frame]] = []
+        self._tab_index = 0
+        self._on_tab_change = lambda: None
+
+        def _select_tab(i: int):
+            self._tab_index = i
+            for j, frame in enumerate(self._tab_frames):
+                if j == i:
+                    frame.grid(row=0, column=0, sticky="nsew")
+                else:
+                    frame.grid_remove()
+            for j, (btn, bar) in enumerate(self._tab_btns):
+                on = j == i
+                btn.config(fg=PAL["accent"] if on else PAL["text_dim"])
+                bar.config(bg=PAL["accent"] if on else PAL["separator"])
+            self._on_tab_change()
+            self._fit_window()
+        self._select_tab = _select_tab
+
+        for i, label in enumerate(("Pick", "Konfiguration")):
+            cell = tk.Frame(tabbar, bg=PAL["surface"])
+            cell.pack(side="left")
+            btn = tk.Button(cell, text=label, command=lambda k=i: _select_tab(k),
+                            bg=PAL["surface"], fg=PAL["text_dim"],
+                            activebackground=PAL["surface"], activeforeground=PAL["accent"],
+                            relief="flat", bd=0, cursor="hand2",
+                            font=self._fonts["ui_bold"], padx=14, pady=5, highlightthickness=0)
+            btn.pack(fill="x")
+            bar = tk.Frame(cell, height=2, bg=PAL["separator"])
+            bar.pack(fill="x")
+            self._tab_btns.append((btn, bar))
+        tk.Frame(tabbar, height=2, bg=PAL["separator"]).pack(side="left", fill="x", expand=True, anchor="s")
 
         # ── TAB 1 : Pick ──────────────────────────────────────────────
         tab_pick = tk.Frame(nb, bg=PAL["surface"], padx=6, pady=6)
         tab_pick.columnconfigure(0, weight=1)
         tab_pick.rowconfigure(4, weight=1)
-        nb.add(tab_pick, text="  Pick  ")
+        self._tab_frames.append(tab_pick)
 
         # Zeile 0: Auswahl + Leeren
         top_row = tk.Frame(tab_pick, bg=PAL["surface"])
@@ -780,7 +842,7 @@ class SkadiTerminalApp:
         # Zeile 1: Phasen-Schalter + Item-Sets
         item_row = tk.Frame(tab_pick, bg=PAL["surface"])
         item_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        item_row.columnconfigure((0, 1, 2), weight=1, uniform="itemset")
+        item_row.columnconfigure((0, 1, 2, 3, 4, 5), weight=1, uniform="itemset")
 
         self._item_phase_var = tk.BooleanVar(value=self.cfg.get("item_phase_enabled", True))
 
@@ -790,11 +852,11 @@ class SkadiTerminalApp:
             _update_toggles()
 
         self._onoff_btn  = self._toggle_btn(item_row, lambda: _toggle_cfg("item_phase_enabled"))
-        self._onoff_btn.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        self._onoff_btn.grid(row=0, column=0, columnspan=2, sticky="ew", padx=(0, 2))
         self._doppel_btn = self._toggle_btn(item_row, lambda: _toggle_cfg("doppel_check_enabled"))
-        self._doppel_btn.grid(row=0, column=1, sticky="ew", padx=2)
+        self._doppel_btn.grid(row=0, column=2, columnspan=2, sticky="ew", padx=2)
         self._small_btn(item_row, "⚙ Item-Sets", self.open_item_set_editor
-                        ).grid(row=0, column=2, sticky="ew", padx=(2, 0))
+                        ).grid(row=0, column=4, columnspan=2, sticky="ew", padx=(2, 0))
 
         def _update_toggles():
             for btn, key, label in ((self._onoff_btn,  "item_phase_enabled",   "Items kaufen"),
@@ -833,8 +895,8 @@ class SkadiTerminalApp:
                             relief="flat", bd=0, cursor="hand2", padx=2, pady=3,
                             activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
                             highlightthickness=0)
-            btn.grid(row=1 + idx // 3, column=idx % 3, sticky="ew",
-                     padx=(0 if idx % 3 == 0 else 2, 0 if idx % 3 == 2 else 2), pady=(4, 0))
+            btn.grid(row=1, column=idx, sticky="ew",
+                     padx=(0 if idx == 0 else 1, 0 if idx == 5 else 1), pady=(4, 0))
             self._item_set_btns.append(btn)
         _refresh_item_set_btns()
 
@@ -861,6 +923,7 @@ class SkadiTerminalApp:
             toggle_btn.config(text="▾ weniger" if self._preset_open.get() else "▸ alle")
             self._fit_window()
 
+        self._toggle_preset = _toggle_preset
         toggle_btn = self._small_btn(preset_header, "▸ alle", _toggle_preset)
         toggle_btn.grid(row=0, column=1, sticky="e", padx=(0, 2))
         self._small_btn(preset_header, "＋ speichern", self.save_preset_dialog
@@ -877,7 +940,7 @@ class SkadiTerminalApp:
             self._rebuild_preset_buttons()
             self._fit_window()
 
-        edit_btn = self._small_btn(preset_header, "✏", _toggle_edit_mode)
+        edit_btn = self._small_btn(preset_header, "bearbeiten", _toggle_edit_mode)
         edit_btn.grid(row=0, column=3, sticky="e", padx=(2, 0))
         self._preset_edit_btn = edit_btn
 
@@ -902,7 +965,7 @@ class SkadiTerminalApp:
         # ── TAB 2 : Konfiguration ─────────────────────────────────────
         tab_cfg = tk.Frame(nb, bg=PAL["surface"], padx=6, pady=6)
         tab_cfg.columnconfigure((0, 1), weight=1, uniform="cfg")
-        nb.add(tab_cfg, text="  Konfiguration  ")
+        self._tab_frames.append(tab_cfg)
 
         cfg_row = 0
 
@@ -1008,7 +1071,7 @@ class SkadiTerminalApp:
 
         _update_cfg_mode_label()
         self._update_cfg_mode_label = _update_cfg_mode_label
-        nb.bind("<<NotebookTabChanged>>", lambda e: (_update_cfg_mode_label(), self._fit_window()))
+        self._on_tab_change = _update_cfg_mode_label
 
         tk.Label(tab_cfg, text=f"Datenordner (Templates, Config): {DATA_DIR}", bg=PAL["surface"], fg=PAL["text_dim"],
                  font=self._fonts["small"], anchor="w", justify="left", wraplength=420
@@ -1018,6 +1081,8 @@ class SkadiTerminalApp:
             ("Alte Templates importieren …", self.import_templates),
             ("Datenordner öffnen",           lambda: open_folder(str(DATA_DIR))),
         ])
+
+        _select_tab(0)
 
         # ── AUFLÖSUNG (immer sichtbar) ────────────────────────────────
         res = self._section(main, "AUFLÖSUNG", row=3)
@@ -1032,40 +1097,42 @@ class SkadiTerminalApp:
         self._refresh_res_display()
 
         # ── Statusleiste ──────────────────────────────────────────────
-        status_bar = tk.Frame(root, bg=PAL["surface2"])
+        status_bar = tk.Frame(self.root, bg=PAL["surface2"])
         status_bar.grid(row=1, column=0, sticky="ew")
         status_bar.columnconfigure(0, weight=1)
         tk.Label(status_bar, textvariable=self.status_var,
                  bg=PAL["surface2"], fg=PAL["text"],
                  font=self._fonts["status"], anchor="w", padx=8, pady=4
                  ).grid(row=0, column=0, sticky="ew")
-        tk.Button(status_bar, text="💾 Speichern", command=self.save_all_settings,
-                  bg=PAL["surface2"], fg=PAL["text"],
-                  activebackground=PAL["success"], activeforeground=PAL["on_accent"],
-                  relief="flat", bd=0, cursor="hand2",
-                  font=self._fonts["small"], padx=8, pady=3, highlightthickness=0
-                  ).grid(row=0, column=1, sticky="e", padx=(0, 4))
+        for col, (txt, cmd) in enumerate((
+            ("☀" if self._dark_mode else "☾", self.toggle_theme),
+            ("A+" if not self._font_large else "A−", self.toggle_font_scale),
+        ), start=1):
+            tk.Button(status_bar, text=txt, command=cmd,
+                      bg=PAL["btn_bg"], fg=PAL["text"],
+                      activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
+                      relief="flat", bd=0, cursor="hand2", width=3,
+                      font=self._fonts["ui_bold"], padx=4, pady=1, highlightthickness=0
+                      ).grid(row=0, column=col, sticky="e", padx=(0, 4), pady=3)
         # Lange Statusmeldungen umbrechen statt das Fenster zu verbreitern
         status_bar.bind("<Configure>", lambda e: status_bar.winfo_children()[0].config(
             wraplength=max(200, e.width - 110)))
 
-        # Hotkey-Listener
-        self.kb_listener = keyboard.Listener(
-            on_press=self._on_global_key_press,
-            on_release=self._on_global_key_release)
-        self.kb_listener.daemon = True
-        self.kb_listener.start()
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        self._update_hotkey_hint()
 
-        # Startup-Preset beim Start automatisch laden
-        sp = self.cfg.get("startup_preset", "")
-        if sp and sp in self.cfg.get("presets", {}):
-            self.root.after(200, lambda: self.load_preset(sp))
-
-        # Auto-Close Timer
-        self._last_game_seen = time.time()
-        self._auto_close_check()
+    def _rebuild_ui(self):
+        """Alle Fenster-Inhalte neu aufbauen — sauberer als Farben umzumappen."""
+        tab = getattr(self, "_tab_index", 0)
+        preset_open = self._preset_open.get() if hasattr(self, "_preset_open") else False
+        for w in self.root.winfo_children():
+            if not isinstance(w, tk.Toplevel):
+                w.destroy()
+        self.root.configure(bg=PAL["bg"])
+        self._build_ui()
+        self._select_tab(tab)
+        if preset_open:
+            self._preset_open.set(False)
+            self._toggle_preset()
+        self._fit_window()
 
     # ──────────────────────────────────────────────────────────────────
     # Font-Helpers
@@ -1144,34 +1211,13 @@ class SkadiTerminalApp:
         ATTR_COLORS["Universal"]    = PAL["uni_col"]
 
     def toggle_theme(self):
-        old_pal = dict(PAL)
         self._dark_mode = not self._dark_mode
         PAL.update(PAL_DARK if self._dark_mode else PAL_LIGHT)
         self._sync_attr_colors()
-        color_map = {old_pal[k]: PAL[k] for k in PAL}
-        self._retheme_widgets(self.root, color_map)
-        self._setup_ttk_style()
-        self._update_display_btns()
-        self._rebuild_hero_grid()
-        self._rebuild_preset_buttons()
-        self._refresh_mode_buttons()
-        self._refresh_item_set_btns()
-        self._update_onoff_btn()
-        self._refresh_res_display()
         self.cfg["dark_mode"] = self._dark_mode
         save_config(self.cfg)
-
-    def _retheme_widgets(self, widget, color_map: dict[str,str]):
-        for attr in ("bg","fg","highlightbackground","highlightcolor",
-                     "activebackground","activeforeground","selectcolor","insertbackground"):
-            try:
-                cur = widget.cget(attr)
-                if cur and cur.startswith("#") and cur.lower() in color_map:
-                    widget.config(**{attr: color_map[cur.lower()]})
-            except Exception:
-                pass
-        for child in widget.winfo_children():
-            self._retheme_widgets(child, color_map)
+        self._rebuild_ui()
+        self.status_var.set(f"Design: {'Dunkel' if self._dark_mode else 'Hell'}")
 
     def toggle_font_scale(self):
         self._font_large = not self._font_large
@@ -1205,8 +1251,7 @@ class SkadiTerminalApp:
                                            font=self._fonts["small"], anchor="e")
         self._last_section_hint.grid(row=0, column=1, sticky="e")
 
-        content = tk.Frame(wrapper, bg=PAL["surface"], padx=6, pady=6,
-                           highlightthickness=1, highlightbackground=PAL["separator"])
+        content = tk.Frame(wrapper, bg=PAL["surface"], padx=6, pady=6)
         content.grid(row=1, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
         return content
@@ -1239,6 +1284,7 @@ class SkadiTerminalApp:
         for w in self.hero_frame.winfo_children():
             w.destroy()
         self.hero_buttons.clear()
+        self._hero_color: dict[str, str] = {}
 
         heroes      = _build_heroes(self.cfg.get("hero_pool",[]), self.cfg.get("custom_heroes",[]))
         current_row = 0
@@ -1263,6 +1309,7 @@ class SkadiTerminalApp:
                 btn.grid(row=current_row + i // HERO_COLS, column=i % HERO_COLS,
                          sticky="ew", padx=1, pady=1)
                 self.hero_buttons[code] = btn
+                self._hero_color[code] = color
 
             current_row += (len(attr_heroes) + HERO_COLS - 1) // HERO_COLS
 
@@ -1278,7 +1325,7 @@ class SkadiTerminalApp:
             n = order.get(code)
             btn.configure(text=f"{n}·{code}" if n else code,
                           bg=PAL["accent"] if n else PAL["btn_bg"],
-                          fg=PAL["on_accent"] if n else PAL["text"],
+                          fg=PAL["on_accent"] if n else self._hero_color.get(code, PAL["text"]),
                           font=self._fonts["hero_bold" if n else "hero"])
 
     def toggle_hero(self, hero_code: str):
