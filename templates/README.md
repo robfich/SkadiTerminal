@@ -1,5 +1,9 @@
 # Templates (mitgeliefert)
 
+**Enthalten:** `skadi_field.png` (Suchfeld) und `skadi_auswahl.png` („Auswählen“), aufgenommen bei 1920 × 1200.
+**Fehlt noch:** `skadi_planung.png` – das bisherige Bild war fast komplett schwarz (Schriftzug nicht getroffen)
+und wurde deshalb nicht übernommen. Bitte im Spiel neu aufnehmen (Konfiguration → Bild-Templates erfassen → 3. PLANUNG).
+
 Hier liegen die Bild-Templates, die SkadiTerminal mitbringt. Sie werden in die EXE eingebaut
 und beim Start in den Datenordner kopiert – aber nur, wenn dort noch keins mit dem Namen liegt.
 Eigene Aufnahmen gehen also nie verloren.

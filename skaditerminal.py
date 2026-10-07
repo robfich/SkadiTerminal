@@ -698,6 +698,15 @@ class _TemplateCache:
         return img
 
 _TEMPLATES = _TemplateCache()
+
+MIN_TEMPLATE_CONTRAST = 4.0    # Standardabweichung der Graustufen; darunter = fast einfarbig
+
+def template_contrast(path: Path) -> float | None:
+    """Wie viel Struktur ein Template hat. Fast einfarbige Bilder passen überall → unbrauchbar."""
+    if not CV2_AVAILABLE:
+        return None
+    img = _TEMPLATES.get(path)
+    return None if img is None else float(img.std())
 _screen_tls = threading.local()   # mss-Instanzen sind nicht thread-sicher
 
 def _grab_screen_gray():
@@ -1110,12 +1119,17 @@ class SkadiTerminalApp:
         cfg_row += 1
 
         def _update_cfg_mode_label(*_):
+            def tpl(path, miss="✕ fehlt"):
+                if not path.exists():
+                    return miss
+                c = template_contrast(path)
+                return "⚠ kaum Kontrast – neu aufnehmen" if c is not None and c < MIN_TEMPLATE_CONTRAST else "✔"
             ok = lambda b, miss="✕ fehlt": "✔" if b else miss
             lines = [
-                f"Suchfeld        {ok(FIELD_TEMPLATE_PATH.exists())}",
-                f"Auswählen       {ok(AUSWAHL_TEMPLATE_PATH.exists())}",
-                f"Planung         {ok(PLANUNG_TEMPLATE_PATH.exists())}",
-                f"Doppel-Pick     {ok(DOPPELT_TEMPLATE_PATH.exists(), '– optional')}",
+                f"Suchfeld        {tpl(FIELD_TEMPLATE_PATH)}",
+                f"Auswählen       {tpl(AUSWAHL_TEMPLATE_PATH)}",
+                f"Planung         {tpl(PLANUNG_TEMPLATE_PATH)}",
+                f"Doppel-Pick     {tpl(DOPPELT_TEMPLATE_PATH, '– optional')}",
                 f"Koordinaten     {ok(self._has_coords(), '✕ nicht kalibriert')}",
             ]
             self._cfg_mode_label.config(text="\n".join(lines))
@@ -2832,9 +2846,15 @@ class SkadiTerminalApp:
             if not win.winfo_exists(): return
             try:
                 pos = self._capture_template(template_path)
-                self.root.after(0, lambda p=pos, lbl=label: _status(
-                    f"✔  {lbl}  —  gespeichert ({p.x},{p.y})  →  {template_path.name}",
-                    PAL["success"]))
+                c = template_contrast(template_path)
+                if c is not None and c < MIN_TEMPLATE_CONTRAST:
+                    self.root.after(0, lambda lbl=label: _status(
+                        f"⚠  {lbl}  —  Bild ist fast einfarbig (kaum Kontrast). "
+                        "Maus genau auf Schrift/Button halten und neu aufnehmen!", PAL["danger"]))
+                else:
+                    self.root.after(0, lambda p=pos, lbl=label: _status(
+                        f"✔  {lbl}  —  gespeichert ({p.x},{p.y})  →  {template_path.name}",
+                        PAL["success"]))
             except Exception as e:
                 self.root.after(0, lambda err=e: _status(f"Fehler: {err}", PAL["danger"]))
 
