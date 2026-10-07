@@ -540,13 +540,26 @@ PAL_DARK = {
     "btn_bg":"#242833","hover":"#2f3442","separator":"#2a2e39",
     "success":"#2a9d62","danger":"#e5484d","input_bg":"#1f232c",
 }
-PAL_LIGHT = {
-    "bg":"#f2f3f7","surface":"#fdfdfe","surface2":"#e8eaf0",
-    "accent":"#d42f45","on_accent":"#ffffff","text":"#16181d","text_dim":"#6b7280",
-    "str_col":"#b42323","agi_col":"#18794a","int_col":"#1d5fbf","uni_col":"#7a3db0",
-    "btn_bg":"#eceef3","hover":"#dfe2ea","separator":"#e2e5ec",
-    "success":"#1f8a52","danger":"#d42f45","input_bg":"#f6f7fa",
+# Mittelweg (ähnlich Discord): dunkelgrau statt schwarz, Schrift hell und kräftig
+PAL_GRAY = {
+    "bg":"#2b2d31","surface":"#34373d","surface2":"#3c3f46",
+    "accent":"#f05a68","on_accent":"#ffffff","text":"#eceef1","text_dim":"#b3b8c1",
+    "str_col":"#ff8f8f","agi_col":"#6fe0a0","int_col":"#86bdff","uni_col":"#d7a8ff",
+    "btn_bg":"#41454d","hover":"#4c5059","separator":"#464a52",
+    "success":"#2f9e64","danger":"#f05a68","input_bg":"#2f3237",
 }
+# Hell, aber ohne reines Weiß (blendet weniger)
+PAL_LIGHT = {
+    "bg":"#d7dbe3","surface":"#e7e9ef","surface2":"#d0d4de",
+    "accent":"#c72a40","on_accent":"#ffffff","text":"#14161b","text_dim":"#4f5563",
+    "str_col":"#a81f1f","agi_col":"#146b40","int_col":"#1a55ad","uni_col":"#6d33a3",
+    "btn_bg":"#d6dae3","hover":"#c8cdd8","separator":"#c4c9d4",
+    "success":"#1d7d4b","danger":"#c72a40","input_bg":"#f0f1f5",
+}
+THEMES      = {"hell": PAL_LIGHT, "grau": PAL_GRAY, "dunkel": PAL_DARK}
+THEME_ORDER = ["hell", "grau", "dunkel"]
+THEME_ICON  = {"hell": "☀", "grau": "☁", "dunkel": "☾"}
+THEME_NAME  = {"hell": "Hell", "grau": "Grau", "dunkel": "Dunkel"}
 PAL: dict[str, str] = dict(PAL_LIGHT)
 
 ATTR_ORDER  = ["Strength","Agility","Intelligence","Universal"]
@@ -735,9 +748,12 @@ class SkadiTerminalApp:
         self.cfg  = load_config()
 
         # Theme & Schriftgröße
-        self._dark_mode:  bool = self.cfg.get("dark_mode",  False)
+        # Design: "hell" | "grau" | "dunkel" (alte Configs: dark_mode → dunkel, sonst grau)
+        self._theme: str = self.cfg.get("theme") or ("dunkel" if self.cfg.get("dark_mode") else "grau")
+        if self._theme not in THEMES:
+            self._theme = "grau"
         self._font_large: bool = self.cfg.get("font_large", False)
-        PAL.update(PAL_DARK if self._dark_mode else PAL_LIGHT)
+        PAL.update(THEMES[self._theme])
         self._sync_attr_colors()
         self.root.configure(bg=PAL["bg"])
 
@@ -800,19 +816,10 @@ class SkadiTerminalApp:
         main = tk.Frame(self.root, bg=PAL["bg"], padx=8, pady=6)
         main.grid(row=0, column=0, sticky="nsew")
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(2, weight=1)
-
-        # ── AUTOMATIK ─────────────────────────────────────────────────
-        auto = self._section(main, "AUTOMATIK", row=0,
-                             hint="Pos1 · Strg+Einfg · ⌫ = Stop")
-        auto.columnconfigure((0, 1, 2), weight=1, uniform="auto")
-        self._btn(auto, "Enter alle 5 s",   self.start_enter).grid(row=0, column=0, sticky="ew", padx=(0, 3))
-        self._btn(auto, "Taste 4 alle 5 s", self.start_four ).grid(row=0, column=1, sticky="ew", padx=3)
-        self._btn(auto, "■  STOP", self.stop_all_macros, accent=True
-                  ).grid(row=0, column=2, sticky="ew", padx=(3, 0))
+        main.rowconfigure(1, weight=1)
 
         # ── APPS ──────────────────────────────────────────────────────
-        apps = self._section(main, "APPS", row=1,
+        apps = self._section(main, "APPS", row=0,
                              hint="Einfg+Entf = Steam+Discord ✕ · Bild↑+Bild↓ = Spiele ✕")
         apps.columnconfigure((0, 1, 2, 3), weight=1, uniform="apps")
         for col, (txt, cmd) in enumerate([
@@ -833,7 +840,7 @@ class SkadiTerminalApp:
                                                       padx=(0 if col == 0 else 2, 0 if col == 3 else 2))
 
         # ── HELDEN-PICK (Notebook) ────────────────────────────────────
-        pick_outer = self._section(main, "HELDEN-PICK", row=2, expand=True,
+        pick_outer = self._section(main, "HELDEN-PICK", row=1, expand=True,
                                    hint="Ende = Pick starten")
         self._pick_hint_lbl = self._last_section_hint
         pick_outer.configure(padx=0, pady=0)
@@ -1044,6 +1051,16 @@ class SkadiTerminalApp:
                     padx=(0 if i % 2 == 0 else 2, 2 if i % 2 == 0 else 0), pady=2)
             cfg_row += (len(items) + 1) // 2
 
+        cfg_header("AUTOMATIK   (Pos1 · Strg+Einfg · ⌫ = Stop – Hotkeys gehen immer)")
+        auto = tk.Frame(tab_cfg, bg=PAL["surface"])
+        auto.grid(row=cfg_row, column=0, columnspan=2, sticky="ew", pady=2)
+        auto.columnconfigure((0, 1, 2), weight=1, uniform="auto")
+        self._btn(auto, "Enter alle 5 s",   self.start_enter).grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        self._btn(auto, "Taste 4 alle 5 s", self.start_four ).grid(row=0, column=1, sticky="ew", padx=2)
+        self._btn(auto, "■  STOP", self.stop_all_macros, accent=True
+                  ).grid(row=0, column=2, sticky="ew", padx=(2, 0))
+        cfg_row += 1
+
         cfg_header("ERKENNUNG")
         self._mode_var = tk.StringVar(value=self.cfg.get("pick_mode", "both"))
         mode_row = tk.Frame(tab_cfg, bg=PAL["surface"])
@@ -1150,7 +1167,7 @@ class SkadiTerminalApp:
         _select_tab(0)
 
         # ── AUFLÖSUNG (immer sichtbar) ────────────────────────────────
-        res = self._section(main, "AUFLÖSUNG", row=3)
+        res = self._section(main, "AUFLÖSUNG", row=2)
         self._res_status = self._last_section_hint      # aktuelle Auflösung rechts im Titel
         res.columnconfigure((0, 1), weight=1, uniform="res")
         self._res_btns: dict[tuple[int, int, int], tk.Button] = {}
@@ -1170,7 +1187,7 @@ class SkadiTerminalApp:
                  font=self._fonts["status"], anchor="w", padx=8, pady=4
                  ).grid(row=0, column=0, sticky="ew")
         for col, (txt, cmd) in enumerate((
-            ("☀" if self._dark_mode else "☾", self.toggle_theme),
+            (THEME_ICON[self._theme], self.toggle_theme),
             ("A+" if not self._font_large else "A−", self.toggle_font_scale),
         ), start=1):
             tk.Button(status_bar, text=txt, command=cmd,
@@ -1255,7 +1272,7 @@ class SkadiTerminalApp:
 
     def _update_display_btns(self):
         if self.theme_btn:
-            self.theme_btn.config(text=f"Design: {'Dunkel' if self._dark_mode else 'Hell'}")
+            self.theme_btn.config(text=f"Design: {THEME_NAME[self._theme]}  (klicken = wechseln)")
         if self.font_btn:
             self.font_btn.config(text=f"Schrift: {'Groß' if self._font_large else 'Normal'}")
 
@@ -1276,13 +1293,13 @@ class SkadiTerminalApp:
         ATTR_COLORS["Universal"]    = PAL["uni_col"]
 
     def toggle_theme(self):
-        self._dark_mode = not self._dark_mode
-        PAL.update(PAL_DARK if self._dark_mode else PAL_LIGHT)
+        self._theme = THEME_ORDER[(THEME_ORDER.index(self._theme) + 1) % len(THEME_ORDER)]
+        PAL.update(THEMES[self._theme])
         self._sync_attr_colors()
-        self.cfg["dark_mode"] = self._dark_mode
+        self.cfg["theme"] = self._theme
         save_config(self.cfg)
         self._rebuild_ui()
-        self.status_var.set(f"Design: {'Dunkel' if self._dark_mode else 'Hell'}")
+        self.status_var.set(f"Design: {THEME_NAME[self._theme]}  — {THEME_ICON[self._theme]} unten wechselt weiter")
 
     def toggle_font_scale(self):
         self._font_large = not self._font_large
@@ -2517,7 +2534,7 @@ class SkadiTerminalApp:
             try:
                 shutil.copy2(cfgs[0], CONFIG_PATH)
                 self.cfg = load_config()
-                self.cfg["dark_mode"]  = self._dark_mode       # Anzeige so lassen wie gerade
+                self.cfg["theme"]      = self._theme           # Anzeige so lassen wie gerade
                 self.cfg["font_large"] = self._font_large
                 save_config(self.cfg)
                 self._mode_var.set(self.cfg.get("pick_mode", "both"))
