@@ -5,6 +5,18 @@
 Dota-2-Helfer für Windows (früher **Gterminal**). Läuft lokal auf dem Gaming-PC –
 Bilderkennung, Maus- und Tastatursteuerung brauchen den echten Bildschirm.
 
+## Hotkeys (global, auch im Spiel)
+
+| Taste | Aktion |
+|---|---|
+| `Ende` | Pick-Makro starten (änderbar unter *Zeiten & Hotkey*) |
+| `Pos1` | Enter alle 5 s |
+| `Strg + Einfg` | Taste 4 alle 5 s |
+| `Backspace` | Alle Makros stoppen |
+| `Einfg + Entf` | Steam **und** Discord schließen |
+| `Bild↑ + Bild↓` | Spiele schließen |
+| `F8` | Punkt bei der Koordinaten-Kalibrierung speichern |
+
 ## Pick-Makro (Taste `Ende`)
 
 | Phase | Was passiert |

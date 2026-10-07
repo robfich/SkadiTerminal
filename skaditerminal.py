@@ -446,16 +446,18 @@ def open_folder(path_str: str) -> bool:
 # Farb-Paletten
 # ──────────────────────────────────────────────────────────────────────────────
 PAL_DARK = {
-    "bg":"#1a1a2e","surface":"#16213e","surface2":"#0f3460",
-    "accent":"#e94560","text":"#e0e0e0","text_dim":"#8888aa",
-    "str_col":"#e05252","agi_col":"#52c87a","int_col":"#5294e0","uni_col":"#c078e0",
-    "btn_bg":"#252545","separator":"#2a2a4a","success":"#3db870","danger":"#e94560","input_bg":"#1e1e3a",
+    "bg":"#15172a","surface":"#1d2038","surface2":"#262a4a",
+    "accent":"#f0506e","on_accent":"#ffffff","text":"#e6e7f2","text_dim":"#9a9cc0",
+    "str_col":"#f06a6a","agi_col":"#5cd68a","int_col":"#6aa8f0","uni_col":"#c98af0",
+    "btn_bg":"#2b2f52","hover":"#383d68","separator":"#33375c",
+    "success":"#2fa866","danger":"#f0506e","input_bg":"#23264a",
 }
 PAL_LIGHT = {
-    "bg":"#eef0f5","surface":"#ffffff","surface2":"#d0d4e8",
-    "accent":"#c0143c","text":"#1a1a2e","text_dim":"#5a5a88",
-    "str_col":"#b02020","agi_col":"#1a7a40","int_col":"#1050b0","uni_col":"#7030a0",
-    "btn_bg":"#dde0ee","separator":"#aab0cc","success":"#1a7a40","danger":"#c0143c","input_bg":"#f4f6ff",
+    "bg":"#eceef5","surface":"#ffffff","surface2":"#dde1ee",
+    "accent":"#c0143c","on_accent":"#ffffff","text":"#1a1c2e","text_dim":"#5b5e80",
+    "str_col":"#b02020","agi_col":"#17733c","int_col":"#1050b0","uni_col":"#7030a0",
+    "btn_bg":"#e4e7f2","hover":"#cfd4ea","separator":"#c9cee2",
+    "success":"#1e8048","danger":"#c0143c","input_bg":"#f4f6ff",
 }
 PAL: dict[str, str] = dict(PAL_LIGHT)
 
@@ -464,6 +466,24 @@ ATTR_COLORS = {"Strength": PAL["str_col"],"Agility": PAL["agi_col"],"Intelligenc
 ATTR_ICONS  = {"Strength":"STR","Agility":"AGI","Intelligence":"INT","Universal":"UNI"}
 ATTR_DE     = {"Strength":"Stärke","Agility":"Beweglichkeit","Intelligence":"Intelligenz","Universal":"Universal"}
 HERO_COLS   = 5
+WIN_W       = 480
+RES_PRESETS = [(2560, 1600, 165), (1920, 1200, 165)]   # Auflösungs-Buttons auf der Startseite
+MODE_LABELS = {"image": "Bild", "coords": "Koord.", "both": "Beides"}
+
+# Schriften: (Familie, Basisgröße in pt, Gewicht). "Groß" skaliert alles um 20 %.
+FONT_SPECS = {
+    "ui":         ("Segoe UI", 9, "normal"),
+    "ui_bold":    ("Segoe UI", 9, "bold"),
+    "mono":       ("Consolas", 9, "normal"),
+    "title":      ("Segoe UI", 11, "bold"),
+    "section":    ("Segoe UI", 8, "bold"),
+    "small":      ("Segoe UI", 8, "normal"),
+    "small_bold": ("Segoe UI", 8, "bold"),
+    "hero":       ("Consolas", 9, "normal"),
+    "hero_bold":  ("Consolas", 9, "bold"),
+    "status":     ("Segoe UI", 8, "normal"),
+    "big_bold":   ("Segoe UI", 9, "bold"),
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Hotkey-Helpers
@@ -617,18 +637,8 @@ class SkadiTerminalApp:
         self.root.configure(bg=PAL["bg"])
 
         # Schrift-Objekte (tkfont — änderbar ohne UI-Neuaufbau)
-        sz = self._fsize
-        self._fonts = {
-            "ui":       tkfont.Font(root, family="Segoe UI",  size=sz(7)),
-            "ui_bold":  tkfont.Font(root, family="Segoe UI",  size=sz(7), weight="bold"),
-            "mono":     tkfont.Font(root, family="Consolas",  size=sz(7)),
-            "title":    tkfont.Font(root, family="Segoe UI",  size=sz(9), weight="bold"),
-            "section":  tkfont.Font(root, family="Segoe UI",  size=sz(7), weight="bold"),
-            "small":    tkfont.Font(root, family="Segoe UI",  size=sz(6)),
-            "hero":     tkfont.Font(root, family="Consolas",  size=sz(7)),
-            "status":   tkfont.Font(root, family="Consolas",  size=sz(6)),
-            "big_bold": tkfont.Font(root, family="Segoe UI",  size=sz(8), weight="bold"),
-        }
+        self._fonts = {name: tkfont.Font(root, family=fam, size=self._fsize(base), weight=w)
+                       for name, (fam, base, w) in FONT_SPECS.items()}
 
         # State
         self.stop_enter = threading.Event()
@@ -641,199 +651,115 @@ class SkadiTerminalApp:
         self.hero_buttons:    dict[str, tk.Button] = {}
         self.pressed_keys     = set()
         self.kill_combo_armed = False
+        self.close_apps_armed = False
         self.pick_hotkey_armed= False
         self.calibrating  = False
         self.calib_points: list[tuple[int,int]] = []
         self.calib_lock   = threading.Lock()
-        self.status_var   = tk.StringVar(value=f"Pos1=ENTER  |  Ende=Pick  |  Strg+Einfg=Taste4  |  BACKSPACE=Stop  |  Config: {CONFIG_PATH}")
+        self.status_var   = tk.StringVar(value=f"Bereit.  Config: {CONFIG_PATH.name}")
+        self.theme_btn = None
+        self.font_btn  = None
 
-        # Root grid — kein Header mehr, main = row 0
+        self._install_hover()
+        self._setup_ttk_style()
+
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
 
-        # ── Header (leer)
-        self._build_header()
-
-        # ── Main content
-        main = tk.Frame(root, bg=PAL["bg"], padx=7, pady=6)
+        main = tk.Frame(root, bg=PAL["bg"], padx=8, pady=6)
         main.grid(row=0, column=0, sticky="nsew")
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(3, weight=1)
+        main.rowconfigure(2, weight=1)
 
-        auto = self._section(main, "AUTO KEYS", row=0)
-        auto.columnconfigure((0,1,2), weight=1)
-        self._btn(auto,"ENTER /5s",  self.start_enter     ).grid(row=0,column=0,sticky="ew",padx=(0,3))
-        self._btn(auto,"Taste 4 /5s",self.start_four      ).grid(row=0,column=1,sticky="ew",padx=3)
-        self._btn(auto,"STOP",       self.stop_all_macros,accent=True).grid(row=0,column=2,sticky="ew",padx=(3,0))
+        # ── AUTOMATIK ─────────────────────────────────────────────────
+        auto = self._section(main, "AUTOMATIK", row=0,
+                             hint="Pos1 · Strg+Einfg · ⌫ = Stop")
+        auto.columnconfigure((0, 1, 2), weight=1, uniform="auto")
+        self._btn(auto, "Enter alle 5 s",   self.start_enter).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        self._btn(auto, "Taste 4 alle 5 s", self.start_four ).grid(row=0, column=1, sticky="ew", padx=3)
+        self._btn(auto, "■  STOP", self.stop_all_macros, accent=True
+                  ).grid(row=0, column=2, sticky="ew", padx=(3, 0))
 
-        apps = self._section(main, "APPS", row=1)
-        apps.columnconfigure((0,1,2), weight=1)
-        self._btn(apps,"Steam X",   self.kill_steam  ).grid(row=0,column=0,sticky="ew",padx=(0,3))
-        self._btn(apps,"Discord X", self.kill_discord).grid(row=0,column=1,sticky="ew",padx=3)
-        self._btn(apps,"Games X",   self.kill_games, accent=True).grid(row=0,column=2,sticky="ew",padx=(3,0))
-        self._btn(apps,"Steam",     self.ui_start_steam  ).grid(row=1,column=0,sticky="ew",padx=(0,3),pady=(3,0))
-        self._btn(apps,"Discord",   self.ui_start_discord).grid(row=1,column=1,sticky="ew",padx=3,   pady=(3,0))
-        tk.Label(apps,text="Bild+ / Bild-",bg=PAL["surface"],fg=PAL["text_dim"],font=self._fonts["small"]).grid(row=1,column=2,sticky="ew",padx=(3,0),pady=(3,0))
+        # ── APPS ──────────────────────────────────────────────────────
+        apps = self._section(main, "APPS", row=1,
+                             hint="Einfg+Entf = Steam+Discord ✕ · Bild↑+Bild↓ = Spiele ✕")
+        apps.columnconfigure((0, 1, 2, 3), weight=1, uniform="apps")
+        for col, (txt, cmd) in enumerate([
+            ("▶ Steam",       self.ui_start_steam),
+            ("▶ Discord",     self.ui_start_discord),
+            ("Voice & Video", self.ui_open_discord_voice_video),
+            ("D2 Settings",   self.ui_open_d2_settings_folder),
+        ]):
+            self._btn(apps, txt, cmd).grid(row=0, column=col, sticky="ew",
+                                           padx=(0 if col == 0 else 2, 0 if col == 3 else 2))
+        for col, (txt, cmd, acc) in enumerate([
+            ("✕ Steam",           self.kill_steam,         False),
+            ("✕ Discord",         self.kill_discord,       False),
+            ("✕ Steam+Disc.",    self.kill_steam_discord, False),
+            ("✕ Spiele",          self.kill_games,         True),
+        ]):
+            self._btn(apps, txt, cmd, accent=acc).grid(row=1, column=col, sticky="ew", pady=(4, 0),
+                                                      padx=(0 if col == 0 else 2, 0 if col == 3 else 2))
 
-        sett = self._section(main, "SETTINGS", row=2)
-        sett.columnconfigure((0,1), weight=1)
-        self._btn(sett,"Voice & Video",self.ui_open_discord_voice_video).grid(row=0,column=0,sticky="ew",padx=(0,3))
-        self._btn(sett,"D2 Settings",  self.ui_open_d2_settings_folder ).grid(row=0,column=1,sticky="ew",padx=(3,0))
-
-        pick_outer = self._section(main, "HERO PICK MACRO", row=3)
-        pick_outer.columnconfigure(0, weight=1)
-        pick_outer.rowconfigure(1, weight=1)
-        # Make the pick_outer wrapper (parent of pick_outer) expand
-        pick_outer.master.rowconfigure(1, weight=1)
-
-        # ── Notebook (Registerkarten) ────────────────────────────────
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("GT.TNotebook",
-                        background=PAL["bg"], borderwidth=0)
-        style.configure("GT.TNotebook.Tab",
-                        background=PAL["btn_bg"], foreground=PAL["text_dim"],
-                        padding=[10, 4], font=("Segoe UI", 8, "bold"),
-                        borderwidth=0)
-        style.map("GT.TNotebook.Tab",
-                  background=[("selected", PAL["surface2"])],
-                  foreground=[("selected", PAL["accent"])])
-
-        nb = ttk.Notebook(pick_outer, style="GT.TNotebook")
-        nb.grid(row=0, column=0, sticky="nsew", pady=(0, 0))
+        # ── HELDEN-PICK (Notebook) ────────────────────────────────────
+        pick_outer = self._section(main, "HELDEN-PICK", row=2, expand=True,
+                                   hint="Ende = Pick starten")
+        self._pick_hint_lbl = self._last_section_hint
+        pick_outer.configure(padx=0, pady=0)
         pick_outer.rowconfigure(0, weight=1)
 
+        nb = ttk.Notebook(pick_outer, style="GT.TNotebook")
+        nb.grid(row=0, column=0, sticky="nsew")
+
         # ── TAB 1 : Pick ──────────────────────────────────────────────
-        tab_pick = tk.Frame(nb, bg=PAL["surface"])
+        tab_pick = tk.Frame(nb, bg=PAL["surface"], padx=6, pady=6)
         tab_pick.columnconfigure(0, weight=1)
-        tab_pick.rowconfigure(5, weight=1)
-        nb.add(tab_pick, text="🎮  Pick")
+        tab_pick.rowconfigure(4, weight=1)
+        nb.add(tab_pick, text="  Pick  ")
 
-        # Zeile 0: Hotkey-Info + Modus kompakt in einer Zeile
+        # Zeile 0: Auswahl + Leeren
         top_row = tk.Frame(tab_pick, bg=PAL["surface"])
-        top_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
-        top_row.columnconfigure(1, weight=1)
+        top_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        top_row.columnconfigure(0, weight=1)
 
-        self.hotkey_label = tk.Label(top_row,
-            text=_hotkey_display(self.cfg.get("pick_hotkey", ["end"])),
-            bg=PAL["surface"], fg=PAL["accent"],
-            font=self._fonts["mono"], anchor="w")
-        self.hotkey_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.selected_label = tk.Label(top_row, text="", bg=PAL["surface"], fg=PAL["text"],
+                                       font=self._fonts["ui_bold"], anchor="w",
+                                       justify="left", wraplength=360)
+        self.selected_label.grid(row=0, column=0, sticky="ew")
+        self._small_btn(top_row, "✕ leeren", self.clear_selection
+                        ).grid(row=0, column=1, sticky="ne", padx=(4, 0))
 
-        # Modus-Umschalter kompakt rechts
-        self._mode_var = tk.StringVar(value=self.cfg.get("pick_mode", "both"))
-
-        mode_inner = tk.Frame(top_row, bg=PAL["surface"])
-        mode_inner.grid(row=0, column=1, sticky="e")
-
-        def _mode_btn(parent, label, val):
-            def _cmd():
-                self._mode_var.set(val)
-                self.cfg["pick_mode"] = val
-                save_config(self.cfg)
-                _refresh_mode_buttons()
-            b = tk.Button(parent, text=label, command=_cmd,
-                          relief="flat", bd=0, cursor="hand2",
-                          font=self._fonts["small"], padx=5, pady=2,
-                          highlightthickness=1,
-                          highlightbackground=PAL["separator"])
-            b.pack(side="left", padx=(0, 2))
-            return b
-
-        self._mode_btns = {
-            "image":  _mode_btn(mode_inner, "📷",  "image"),
-            "coords": _mode_btn(mode_inner, "📍",  "coords"),
-            "both":   _mode_btn(mode_inner, "🔀",  "both"),
-        }
-
-        def _refresh_mode_buttons():
-            cur = self._mode_var.get()
-            for key, btn in self._mode_btns.items():
-                if key == cur:
-                    btn.config(bg=PAL["accent"], fg=PAL["bg"],
-                               highlightbackground=PAL["accent"])
-                else:
-                    btn.config(bg=PAL["btn_bg"], fg=PAL["text"],
-                               highlightbackground=PAL["separator"])
-
-        _refresh_mode_buttons()
-        self._refresh_mode_buttons = _refresh_mode_buttons
-
-        # Zeile 1: Auswahl-Label
-        self.selected_label = tk.Label(tab_pick,
-            text="Auswahl (max 8):  -",
-            bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["mono"], anchor="w")
-        self.selected_label.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 2))
-
-        # Item-Set-Zeile (über Preset)
+        # Zeile 1: Phasen-Schalter + Item-Sets
         item_row = tk.Frame(tab_pick, bg=PAL["surface"])
-        item_row.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 3))
-        item_row.columnconfigure((1,2,3,4,5,6), weight=1)
-
-        # Zeile 0: Label + AN/AUS Toggle
-        tk.Label(item_row, text="🛒 Items:",
-                 bg=PAL["surface"], fg=PAL["text_dim"],
-                 font=self._fonts["small"], anchor="w"
-                 ).grid(row=0, column=0, sticky="w", padx=(0, 4))
+        item_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        item_row.columnconfigure((0, 1, 2), weight=1, uniform="itemset")
 
         self._item_phase_var = tk.BooleanVar(value=self.cfg.get("item_phase_enabled", True))
 
-        def _toggle_item_phase():
-            # Zustand umkehren
-            new_val = not self.cfg.get("item_phase_enabled", True)
-            self.cfg["item_phase_enabled"] = new_val
-            self._item_phase_var.set(new_val)
+        def _toggle_cfg(key):
+            self.cfg[key] = not self.cfg.get(key, True)
             save_config(self.cfg)
-            _update_onoff_btn()
+            _update_toggles()
 
-        self._onoff_btn = tk.Button(item_row, text="",
-                  command=_toggle_item_phase,
-                  relief="flat", bd=0, cursor="hand2",
-                  font=self._fonts["small"], padx=8, pady=3,
-                  highlightthickness=1, highlightbackground=PAL["separator"])
-        self._onoff_btn.grid(row=0, column=1, sticky="ew", padx=(0, 4))
+        self._onoff_btn  = self._toggle_btn(item_row, lambda: _toggle_cfg("item_phase_enabled"))
+        self._onoff_btn.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        self._doppel_btn = self._toggle_btn(item_row, lambda: _toggle_cfg("doppel_check_enabled"))
+        self._doppel_btn.grid(row=0, column=1, sticky="ew", padx=2)
+        self._small_btn(item_row, "⚙ Item-Sets", self.open_item_set_editor
+                        ).grid(row=0, column=2, sticky="ew", padx=(2, 0))
 
-        def _update_onoff_btn():
-            on = self.cfg.get("item_phase_enabled", True)
-            self._item_phase_var.set(on)
-            self._onoff_btn.config(
-                text="✔ Phase C AN" if on else "✗ Phase C AUS",
-                bg=PAL["success"] if on else PAL["btn_bg"],
-                fg=PAL["bg"]      if on else PAL["text_dim"],
-            )
-        _update_onoff_btn()
-        self._update_onoff_btn = _update_onoff_btn
+        def _update_toggles():
+            for btn, key, label in ((self._onoff_btn,  "item_phase_enabled",   "Items kaufen"),
+                                    (self._doppel_btn, "doppel_check_enabled", "Doppel-Check")):
+                on = self.cfg.get(key, True)
+                btn.config(text=f"{'✔' if on else '✕'}  {label}",
+                           bg=PAL["success"] if on else PAL["btn_bg"],
+                           fg=PAL["on_accent"] if on else PAL["text_dim"],
+                           activebackground=PAL["success"], activeforeground=PAL["on_accent"])
+            self._item_phase_var.set(self.cfg.get("item_phase_enabled", True))
+        _update_toggles()
+        self._update_onoff_btn = _update_toggles
 
-        def _toggle_doppel():
-            self.cfg["doppel_check_enabled"] = not self.cfg.get("doppel_check_enabled", True)
-            save_config(self.cfg)
-            _update_doppel_btn()
-
-        self._doppel_btn = tk.Button(item_row, text="",
-                  command=_toggle_doppel,
-                  relief="flat", bd=0, cursor="hand2",
-                  font=self._fonts["small"], padx=8, pady=3,
-                  highlightthickness=1, highlightbackground=PAL["separator"])
-        self._doppel_btn.grid(row=0, column=2, columnspan=2, sticky="ew", padx=(0, 4))
-
-        def _update_doppel_btn():
-            on = self.cfg.get("doppel_check_enabled", True)
-            self._doppel_btn.config(
-                text="✔ Doppel-Check AN" if on else "✗ Doppel-Check AUS",
-                bg=PAL["success"] if on else PAL["btn_bg"],
-                fg=PAL["bg"]      if on else PAL["text_dim"],
-            )
-        _update_doppel_btn()
-
-        tk.Button(item_row, text="⚙",
-                  command=self.open_item_set_editor,
-                  bg=PAL["surface2"], fg=PAL["accent"],
-                  relief="flat", bd=0, cursor="hand2",
-                  font=self._fonts["title"], padx=4, pady=1,
-                  highlightthickness=0
-                  ).grid(row=0, column=7, sticky="e", padx=(4, 0))
-
-        # Zeilen 1+2: 6 Set-Buttons (3 pro Zeile)
         self._item_set_var  = tk.IntVar(value=self.cfg.get("active_item_set", 0))
         self._item_set_btns: list[tk.Button] = []
 
@@ -847,41 +773,33 @@ class SkadiTerminalApp:
             active = self.cfg.get("active_item_set", 0)
             sets   = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
             for i, btn in enumerate(self._item_set_btns):
-                name = sets[i]["name"] if i < len(sets) else f"Set {i+1}"
-                btn.config(
-                    text=name,
-                    bg=PAL["accent"] if i == active else PAL["btn_bg"],
-                    fg=PAL["bg"]     if i == active else PAL["text"],
-                )
+                on = i == active
+                btn.config(text=sets[i]["name"] if i < len(sets) else f"Set {i+1}",
+                           bg=PAL["accent"] if on else PAL["btn_bg"],
+                           fg=PAL["on_accent"] if on else PAL["text"],
+                           font=self._fonts["small_bold" if on else "small"])
         self._refresh_item_set_btns = _refresh_item_set_btns
 
         for idx in range(6):
-            sets = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
-            name = sets[idx]["name"] if idx < len(sets) else f"Set {idx+1}"
-            r    = 1 + idx // 3
-            c    = idx % 3
-            btn  = tk.Button(item_row, text=name,
-                             command=lambda i=idx: _set_active_item_set(i),
-                             bg=PAL["accent"] if idx == self.cfg.get("active_item_set",0) else PAL["btn_bg"],
-                             fg=PAL["bg"]     if idx == self.cfg.get("active_item_set",0) else PAL["text"],
-                             relief="flat", bd=0, cursor="hand2",
-                             font=self._fonts["small"],
-                             padx=2, pady=3, width=8,
-                             anchor="center",
-                             highlightthickness=1, highlightbackground=PAL["separator"])
-            btn.grid(row=r, column=1+c, sticky="ew", padx=(0, 2), pady=(1, 0))
-            item_row.columnconfigure(1+c, weight=1, uniform="itemset")
+            btn = tk.Button(item_row, command=lambda i=idx: _set_active_item_set(i),
+                            relief="flat", bd=0, cursor="hand2", padx=2, pady=3,
+                            activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
+                            highlightthickness=0)
+            btn.grid(row=1 + idx // 3, column=idx % 3, sticky="ew",
+                     padx=(0 if idx % 3 == 0 else 2, 0 if idx % 3 == 2 else 2), pady=(4, 0))
             self._item_set_btns.append(btn)
+        _refresh_item_set_btns()
 
-        # Preset — erste 3 immer sichtbar + einklappbar für Rest
+        # Zeile 2: Presets
         preset_outer = tk.Frame(tab_pick, bg=PAL["surface"])
-        preset_outer.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 4))
+        preset_outer.grid(row=2, column=0, sticky="ew", pady=(0, 6))
         preset_outer.columnconfigure(0, weight=1)
 
-        # Zeile 0: Toggle + ＋ Button
         preset_header = tk.Frame(preset_outer, bg=PAL["surface"])
-        preset_header.grid(row=0, column=0, sticky="ew")
-        preset_header.columnconfigure(1, weight=1)
+        preset_header.grid(row=0, column=0, sticky="ew", pady=(0, 3))
+        preset_header.columnconfigure(0, weight=1)
+        tk.Label(preset_header, text="PRESETS", bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["section"], anchor="w").grid(row=0, column=0, sticky="w")
 
         self._preset_open = tk.BooleanVar(value=False)
 
@@ -889,216 +807,189 @@ class SkadiTerminalApp:
             if self._preset_open.get():
                 preset_extra.grid_remove()
                 self._preset_open.set(False)
-                toggle_btn.config(text="▶ mehr")
             else:
                 preset_extra.grid()
                 self._preset_open.set(True)
-                toggle_btn.config(text="▼ mehr")
-            # Fensterhöhe an neuen Inhalt anpassen, Breite bleibt fix
-            self.root.update_idletasks()
-            self.root.geometry(f"470x{self.root.winfo_reqheight()}")
+            toggle_btn.config(text="▾ weniger" if self._preset_open.get() else "▸ alle")
+            self._fit_window()
 
-        toggle_btn = tk.Button(preset_header, text="▶ mehr",
-                               command=_toggle_preset,
-                               bg=PAL["surface"], fg=PAL["text_dim"],
-                               activebackground=PAL["surface"], activeforeground=PAL["accent"],
-                               relief="flat", bd=0, cursor="hand2",
-                               font=self._fonts["small"], padx=0, pady=2,
-                               highlightthickness=0)
-        toggle_btn.grid(row=0, column=0, sticky="w")
+        toggle_btn = self._small_btn(preset_header, "▸ alle", _toggle_preset)
+        toggle_btn.grid(row=0, column=1, sticky="e", padx=(0, 2))
+        self._small_btn(preset_header, "＋ speichern", self.save_preset_dialog
+                        ).grid(row=0, column=2, sticky="e", padx=2)
 
-        self._btn(preset_header, "＋", self.save_preset_dialog
-                  ).grid(row=0, column=1, sticky="e", padx=(0, 2))
-
-        # ✏ Stift — schaltet Änderungsmodus (Sterne sichtbar) ein/aus
         self._preset_edit_mode = False
 
         def _toggle_edit_mode():
             self._preset_edit_mode = not self._preset_edit_mode
-            edit_btn.config(
-                bg=PAL["accent"] if self._preset_edit_mode else PAL["surface"],
-                fg=PAL["bg"]     if self._preset_edit_mode else PAL["text_dim"],
-            )
+            edit_btn.config(bg=PAL["accent"] if self._preset_edit_mode else PAL["btn_bg"],
+                            fg=PAL["on_accent"] if self._preset_edit_mode else PAL["text"])
+            self.status_var.set("Bearbeiten: ☆ = Preset beim Start laden" if self._preset_edit_mode
+                                else "Bearbeiten beendet.")
             self._rebuild_preset_buttons()
-            self.root.update_idletasks()
-            self.root.geometry(f"470x{self.root.winfo_reqheight()}")
+            self._fit_window()
 
-        edit_btn = tk.Button(preset_header, text="✏",
-                             command=_toggle_edit_mode,
-                             bg=PAL["surface"], fg=PAL["text_dim"],
-                             activebackground=PAL["accent"], activeforeground=PAL["bg"],
-                             relief="flat", bd=0, cursor="hand2",
-                             font=self._fonts["small"], padx=4, pady=2,
-                             highlightthickness=1, highlightbackground=PAL["separator"])
-        edit_btn.grid(row=0, column=2, sticky="e")
+        edit_btn = self._small_btn(preset_header, "✏", _toggle_edit_mode)
+        edit_btn.grid(row=0, column=3, sticky="e", padx=(2, 0))
         self._preset_edit_btn = edit_btn
 
-        # Zeile 1: Immer 3 feste Preset-Buttons
         self.preset_btn_frame = tk.Frame(preset_outer, bg=PAL["surface"])
         self.preset_btn_frame.grid(row=1, column=0, sticky="ew")
-        self.preset_btn_frame.columnconfigure((0, 1, 2), weight=1, uniform="preset")
 
-        # Zeile 2: Extra Presets (aufklappbar)
         preset_extra = tk.Frame(preset_outer, bg=PAL["surface"])
         preset_extra.grid(row=2, column=0, sticky="ew")
-        preset_extra.columnconfigure((0, 1, 2), weight=1, uniform="preset")
         preset_extra.grid_remove()
         self._preset_extra_frame = preset_extra
 
         self._rebuild_preset_buttons()
 
-        # Hero-Grid
+        # Zeile 3: Trennlinie, Zeile 4: Hero-Grid
+        tk.Frame(tab_pick, bg=PAL["separator"], height=1).grid(row=3, column=0, sticky="ew", pady=(0, 4))
         self.hero_frame = tk.Frame(tab_pick, bg=PAL["surface"])
-        self.hero_frame.grid(row=4, column=0, sticky="nsew", padx=4)
-        tab_pick.rowconfigure(4, weight=1)
+        self.hero_frame.grid(row=4, column=0, sticky="nsew")
         for c in range(HERO_COLS):
-            self.hero_frame.columnconfigure(c, weight=1)
+            self.hero_frame.columnconfigure(c, weight=1, uniform="hero")
         self._rebuild_hero_grid()
 
         # ── TAB 2 : Konfiguration ─────────────────────────────────────
-        tab_cfg = tk.Frame(nb, bg=PAL["surface"])
-        tab_cfg.columnconfigure(0, weight=1)
-        nb.add(tab_cfg, text="⚙  Konfiguration")
+        tab_cfg = tk.Frame(nb, bg=PAL["surface"], padx=6, pady=6)
+        tab_cfg.columnconfigure((0, 1), weight=1, uniform="cfg")
+        nb.add(tab_cfg, text="  Konfiguration  ")
 
         cfg_row = 0
 
-        # ── Pick-Konfiguration ────────────────────────────────────────
-        cfg_pick_items = [
-            ("📍 Koordinaten kalibrieren (F8)", self.start_calibration),
-            ("📷 Bild-Templates erfassen",       self.open_image_calib_dialog),
-            ("🔍 Erkennung testen",              self.test_image_recognition),
-            ("🧪 Doppel-Pick-Erkennung testen",   self.test_doppel_check),
-            ("🛒 Item-Sets verwalten",           self.open_item_set_editor),
-            ("⏱ Zeiten & Hotkey",               self.open_timing_config),
-            ("🎯 Held-Pool verwalten",            self.open_hero_pool_manager),
-            ("➕ Eigenen Held hinzufügen",        self.open_hero_manager),
-        ]
-        for label, cmd in cfg_pick_items:
-            self._btn(tab_cfg, label, cmd).grid(
-                row=cfg_row, column=0, sticky="ew", padx=6, pady=2)
+        def cfg_header(text):
+            nonlocal cfg_row
+            tk.Label(tab_cfg, text=text, bg=PAL["surface"], fg=PAL["text_dim"],
+                     font=self._fonts["section"], anchor="w"
+                     ).grid(row=cfg_row, column=0, columnspan=2, sticky="w",
+                            pady=(0 if cfg_row == 0 else 10, 3))
             cfg_row += 1
 
-        # ── Trennlinie ────────────────────────────────────────────────
-        tk.Frame(tab_cfg, bg=PAL["separator"], height=1
-                 ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(6, 4))
+        def cfg_buttons(items):
+            nonlocal cfg_row
+            for i, (label, cmd) in enumerate(items):
+                self._btn(tab_cfg, label, cmd).grid(
+                    row=cfg_row + i // 2, column=i % 2, sticky="ew",
+                    padx=(0 if i % 2 == 0 else 2, 2 if i % 2 == 0 else 0), pady=2)
+            cfg_row += (len(items) + 1) // 2
+
+        cfg_header("ERKENNUNG")
+        self._mode_var = tk.StringVar(value=self.cfg.get("pick_mode", "both"))
+        mode_row = tk.Frame(tab_cfg, bg=PAL["surface"])
+        mode_row.grid(row=cfg_row, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        cfg_row += 1
+        tk.Label(mode_row, text="Pick-Modus:", bg=PAL["surface"], fg=PAL["text"],
+                 font=self._fonts["ui"]).pack(side="left", padx=(0, 6))
+        mode_inner = tk.Frame(mode_row, bg=PAL["separator"], padx=1, pady=1)
+        mode_inner.pack(side="left")
+        tk.Label(mode_row, text="Bild = Templates · Koord. = F8-Punkte", bg=PAL["surface"],
+                 fg=PAL["text_dim"], font=self._fonts["small"]).pack(side="left", padx=(8, 0))
+
+        def _set_mode(val):
+            self._mode_var.set(val)
+            self.cfg["pick_mode"] = val
+            save_config(self.cfg)
+            _refresh_mode_buttons()
+            self.status_var.set(f"Erkennung: {MODE_LABELS[val]}")
+
+        self._mode_btns = {}
+        for val in ("image", "coords", "both"):
+            b = tk.Button(mode_inner, text=MODE_LABELS[val], command=lambda v=val: _set_mode(v),
+                          relief="flat", bd=0, cursor="hand2",
+                          font=self._fonts["small"], padx=7, pady=2, highlightthickness=0)
+            b.pack(side="left", padx=(0 if val == "image" else 1, 0))
+            self._mode_btns[val] = b
+
+        def _refresh_mode_buttons():
+            cur = self._mode_var.get()
+            for key, btn in self._mode_btns.items():
+                on = key == cur
+                btn.config(bg=PAL["accent"] if on else PAL["btn_bg"],
+                           fg=PAL["on_accent"] if on else PAL["text"],
+                           activebackground=PAL["accent"], activeforeground=PAL["on_accent"])
+        _refresh_mode_buttons()
+        self._refresh_mode_buttons = _refresh_mode_buttons
+
+        cfg_buttons([
+            ("Bild-Templates erfassen",      self.open_image_calib_dialog),
+            ("Erkennung testen",             self.test_image_recognition),
+            ("Doppel-Pick-Test",             self.test_doppel_check),
+            ("Koordinaten kalibrieren (F8)", self.start_calibration),
+        ])
+
+        cfg_header("PICK & ITEMS")
+        cfg_buttons([
+            ("Zeiten & Hotkey",          self.open_timing_config),
+            ("Item-Sets verwalten",      self.open_item_set_editor),
+            ("Held-Pool verwalten",      self.open_hero_pool_manager),
+            ("Eigenen Held hinzufügen",  self.open_hero_manager),
+        ])
+
+        cfg_header("ANZEIGE")
+        self.theme_btn = self._btn(tab_cfg, "", self.toggle_theme)
+        self.theme_btn.grid(row=cfg_row, column=0, sticky="ew", padx=(0, 2), pady=2)
+        self.font_btn = self._btn(tab_cfg, "", self.toggle_font_scale)
+        self.font_btn.grid(row=cfg_row, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self._update_display_btns()
         cfg_row += 1
 
-        # ── Auflösung ─────────────────────────────────────────────────
-        res_hdr = tk.Frame(tab_cfg, bg=PAL["surface"])
-        res_hdr.grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(0, 3))
-        res_hdr.columnconfigure(1, weight=1)
-        tk.Label(res_hdr, text="🖥  Auflösung:",
-                 bg=PAL["surface"], fg=PAL["text_dim"],
-                 font=self._fonts["small"], anchor="w"
-                 ).grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self._res_status = tk.Label(res_hdr, text=self._res_current_str(),
-                 bg=PAL["surface"], fg=PAL["success"],
-                 font=self._fonts["mono"], anchor="w")
-        self._res_status.grid(row=0, column=1, sticky="w")
+        cfg_header("STRATZ")
+        cfg_buttons([(name, lambda u=url: webbrowser.open(u)) for name, url in [
+            ("Robert", "https://stratz.com/players/44216623"),
+            ("Jan",    "https://stratz.com/players/20846181"),
+            ("Ben",    "https://stratz.com/players/314442285"),
+        ]])
+
+        cfg_header("STATUS")
+        self._cfg_mode_label = tk.Label(tab_cfg, text="", bg=PAL["surface"], fg=PAL["text"],
+                                        font=self._fonts["mono"], anchor="w", justify="left")
+        self._cfg_mode_label.grid(row=cfg_row, column=0, columnspan=2, sticky="ew")
         cfg_row += 1
-
-        res_btn_row = tk.Frame(tab_cfg, bg=PAL["surface"])
-        res_btn_row.grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(0, 4))
-        res_btn_row.columnconfigure((0, 1), weight=1)
-        self._btn(res_btn_row, "2560×1600  165Hz", lambda: self._set_res(2560,1600,165)
-                  ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
-        self._btn(res_btn_row, "1920×1200  165Hz", lambda: self._set_res(1920,1200,165)
-                  ).grid(row=0, column=1, sticky="ew", padx=(3, 0))
-        cfg_row += 1
-
-        # ── Trennlinie ────────────────────────────────────────────────
-        tk.Frame(tab_cfg, bg=PAL["separator"], height=1
-                 ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(2, 6))
-        cfg_row += 1
-
-        # ── Theme & Zoom ──────────────────────────────────────────────
-        tz_row = tk.Frame(tab_cfg, bg=PAL["surface"])
-        tz_row.grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(0, 4))
-        tz_row.columnconfigure((0, 1), weight=1)
-
-        self.theme_btn = tk.Button(tz_row,
-            text="☀️ Dark Mode" if not self._dark_mode else "🌙 Light Mode",
-            command=self.toggle_theme,
-            bg=PAL["btn_bg"], fg=PAL["text"],
-            activebackground=PAL["accent"], activeforeground=PAL["bg"],
-            relief="flat", bd=0, cursor="hand2",
-            font=self._fonts["ui"], padx=4, pady=4,
-            highlightthickness=1, highlightbackground=PAL["separator"])
-        self.theme_btn.grid(row=0, column=0, sticky="ew", padx=(0, 3))
-
-        self.font_btn = tk.Button(tz_row,
-            text="🔡 Normal" if not self._font_large else "🔠 Groß",
-            command=self.toggle_font_scale,
-            bg=PAL["btn_bg"], fg=PAL["text"],
-            activebackground=PAL["accent"], activeforeground=PAL["bg"],
-            relief="flat", bd=0, cursor="hand2",
-            font=self._fonts["ui"], padx=4, pady=4,
-            highlightthickness=1, highlightbackground=PAL["separator"])
-        self.font_btn.grid(row=0, column=1, sticky="ew", padx=(3, 0))
-        cfg_row += 1
-
-        # ── Trennlinie ────────────────────────────────────────────────
-        tk.Frame(tab_cfg, bg=PAL["separator"], height=1
-                 ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(2, 6))
-        cfg_row += 1
-
-        # ── Stratz-Links ──────────────────────────────────────────────
-        tk.Label(tab_cfg, text="📊  Stratz",
-                 bg=PAL["surface"], fg=PAL["text_dim"],
-                 font=self._fonts["small"], anchor="w"
-                 ).grid(row=cfg_row, column=0, sticky="w", padx=6, pady=(0, 3))
-        cfg_row += 1
-
-        for name, url in [
-            ("Stratz Robert",  "https://stratz.com/players/44216623"),
-            ("Stratz Jan",     "https://stratz.com/players/20846181"),
-            ("Stratz Ben",     "https://stratz.com/players/314442285"),
-        ]:
-            self._btn(tab_cfg, f"🔗  {name}", lambda u=url: webbrowser.open(u)
-                      ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=2)
-            cfg_row += 1
-
-        # ── Status-Info ───────────────────────────────────────────────
-        tk.Frame(tab_cfg, bg=PAL["separator"], height=1
-                 ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(6, 4))
-        cfg_row += 1
-
-        self._cfg_mode_label = tk.Label(tab_cfg,
-            text="",
-            bg=PAL["surface"], fg=PAL["text_dim"],
-            font=self._fonts["small"], anchor="w", justify="left", wraplength=360)
-        self._cfg_mode_label.grid(row=cfg_row, column=0, sticky="ew", padx=6)
 
         def _update_cfg_mode_label(*_):
-            ok = lambda b, miss="✗ fehlt": "✔" if b else miss
+            ok = lambda b, miss="✕ fehlt": "✔" if b else miss
             lines = [
-                f"Suchfeld-Template:     {ok(FIELD_TEMPLATE_PATH.exists())}",
-                f"Auswählen-Template:    {ok(AUSWAHL_TEMPLATE_PATH.exists())}",
-                f"Planung-Template:      {ok(PLANUNG_TEMPLATE_PATH.exists())}",
-                f"Doppel-Pick-Template:  {ok(DOPPELT_TEMPLATE_PATH.exists(), '– optional')}",
-                f"Koordinaten:           {ok(self._has_coords(), '✗ nicht kalibriert')}",
+                f"Suchfeld        {ok(FIELD_TEMPLATE_PATH.exists())}",
+                f"Auswählen       {ok(AUSWAHL_TEMPLATE_PATH.exists())}",
+                f"Planung         {ok(PLANUNG_TEMPLATE_PATH.exists())}",
+                f"Doppel-Pick     {ok(DOPPELT_TEMPLATE_PATH.exists(), '– optional')}",
+                f"Koordinaten     {ok(self._has_coords(), '✕ nicht kalibriert')}",
             ]
             self._cfg_mode_label.config(text="\n".join(lines))
 
         _update_cfg_mode_label()
-        nb.bind("<<NotebookTabChanged>>", _update_cfg_mode_label)
+        nb.bind("<<NotebookTabChanged>>", lambda e: (_update_cfg_mode_label(), self._fit_window()))
 
-        # Status-Leiste + globaler Speichern-Button
-        status_bar = tk.Frame(root, bg=PAL["surface2"], height=22)
+        # ── AUFLÖSUNG (immer sichtbar) ────────────────────────────────
+        res = self._section(main, "AUFLÖSUNG", row=3)
+        self._res_status = self._last_section_hint      # aktuelle Auflösung rechts im Titel
+        res.columnconfigure((0, 1), weight=1, uniform="res")
+        self._res_btns: dict[tuple[int, int, int], tk.Button] = {}
+        for col, mode in enumerate(RES_PRESETS):
+            w, h, hz = mode
+            b = self._btn(res, f"{w} × {h} · {hz} Hz", lambda m=mode: self._set_res(*m))
+            b.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 2, 2 if col == 0 else 0))
+            self._res_btns[mode] = b
+        self._refresh_res_display()
+
+        # ── Statusleiste ──────────────────────────────────────────────
+        status_bar = tk.Frame(root, bg=PAL["surface2"])
         status_bar.grid(row=1, column=0, sticky="ew")
         status_bar.columnconfigure(0, weight=1)
         tk.Label(status_bar, textvariable=self.status_var,
-                 bg=PAL["surface2"], fg=PAL["text_dim"],
-                 font=self._fonts["status"], anchor="w", padx=6, pady=2
+                 bg=PAL["surface2"], fg=PAL["text"],
+                 font=self._fonts["status"], anchor="w", padx=8, pady=4
                  ).grid(row=0, column=0, sticky="ew")
-        tk.Button(status_bar, text="💾 Speichern",
-                  command=self.save_all_settings,
-                  bg=PAL["surface2"], fg=PAL["success"],
-                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+        tk.Button(status_bar, text="💾 Speichern", command=self.save_all_settings,
+                  bg=PAL["surface2"], fg=PAL["text"],
+                  activebackground=PAL["success"], activeforeground=PAL["on_accent"],
                   relief="flat", bd=0, cursor="hand2",
-                  font=self._fonts["small"], padx=8, pady=2,
-                  highlightthickness=0
+                  font=self._fonts["small"], padx=8, pady=3, highlightthickness=0
                   ).grid(row=0, column=1, sticky="e", padx=(0, 4))
+        # Lange Statusmeldungen umbrechen statt das Fenster zu verbreitern
+        status_bar.bind("<Configure>", lambda e: status_bar.winfo_children()[0].config(
+            wraplength=max(200, e.width - 110)))
 
         # Hotkey-Listener
         self.kb_listener = keyboard.Listener(
@@ -1107,6 +998,7 @@ class SkadiTerminalApp:
         self.kb_listener.daemon = True
         self.kb_listener.start()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._update_hotkey_hint()
 
         # Startup-Preset beim Start automatisch laden
         sp = self.cfg.get("startup_preset", "")
@@ -1121,28 +1013,68 @@ class SkadiTerminalApp:
     # Font-Helpers
     # ──────────────────────────────────────────────────────────────────
     def _fsize(self, base: int) -> int:
-        return round(base * (1.35 if self._font_large else 1.0))
+        return round(base * (1.2 if self._font_large else 1.0))
 
     def _update_fonts(self):
-        sz = self._fsize
-        self._fonts["ui"]      .configure(size=sz(7))
-        self._fonts["ui_bold"] .configure(size=sz(7))
-        self._fonts["mono"]    .configure(size=sz(7))
-        self._fonts["title"]   .configure(size=sz(9))
-        self._fonts["section"] .configure(size=sz(7))
-        self._fonts["small"]   .configure(size=sz(6))
-        self._fonts["hero"]    .configure(size=sz(7))
-        self._fonts["status"]  .configure(size=sz(6))
-        self._fonts["big_bold"].configure(size=sz(8))
+        for name, (_fam, base, _w) in FONT_SPECS.items():
+            self._fonts[name].configure(size=self._fsize(base))
+
+    def _fit_window(self):
+        """Breite fix, Höhe an den Inhalt anpassen (aber nie höher als der Bildschirm)."""
+        self.root.update_idletasks()
+        h = min(self.root.winfo_reqheight(), self.root.winfo_screenheight() - 80)
+        self.root.geometry(f"{WIN_W}x{h}")
 
     # ──────────────────────────────────────────────────────────────────
-    # Header (minimal — nur root rowconfigure placeholder)
+    # Stil: ttk-Tabs, Hover-Effekt
     # ──────────────────────────────────────────────────────────────────
-    def _build_header(self):
-        # Kein Header mehr — theme/font in Konfiguration Tab
-        # Dummy-Frame damit rowconfigure(1) weiter klappt
-        self.font_btn  = None
-        self.theme_btn = None
+    def _setup_ttk_style(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("GT.TNotebook", background=PAL["surface"], borderwidth=0,
+                        bordercolor=PAL["separator"], lightcolor=PAL["surface"],
+                        darkcolor=PAL["surface"], tabmargins=[0, 0, 0, 0])
+        style.configure("GT.TNotebook.Tab", background=PAL["btn_bg"], foreground=PAL["text_dim"],
+                        padding=[12, 5], font=self._fonts["ui_bold"], borderwidth=0,
+                        bordercolor=PAL["separator"], lightcolor=PAL["btn_bg"])
+        style.map("GT.TNotebook.Tab",
+                  background=[("selected", PAL["surface"]), ("active", PAL["hover"])],
+                  foreground=[("selected", PAL["accent"])],
+                  lightcolor=[("selected", PAL["surface"])])
+
+    def _install_hover(self):
+        """Neutrale Buttons beim Überfahren leicht hervorheben."""
+        def _enter(e):
+            w = e.widget
+            try:
+                if w.cget("bg") == PAL["btn_bg"]:
+                    w.config(bg=PAL["hover"])
+            except Exception:
+                pass
+
+        def _leave(e):
+            w = e.widget
+            try:
+                if w.cget("bg") == PAL["hover"]:
+                    w.config(bg=PAL["btn_bg"])
+            except Exception:
+                pass
+
+        self.root.bind_class("Button", "<Enter>", _enter, add="+")
+        self.root.bind_class("Button", "<Leave>", _leave, add="+")
+
+    def _update_display_btns(self):
+        if self.theme_btn:
+            self.theme_btn.config(text=f"Design: {'Dunkel' if self._dark_mode else 'Hell'}")
+        if self.font_btn:
+            self.font_btn.config(text=f"Schrift: {'Groß' if self._font_large else 'Normal'}")
+
+    def _update_hotkey_hint(self):
+        combo = self.cfg.get("pick_hotkey", ["end"])
+        try:
+            self._pick_hint_lbl.config(text=f"{_hotkey_display(combo)} = Pick starten")
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────────────────────
     # Theme & Font Toggle
@@ -1160,18 +1092,14 @@ class SkadiTerminalApp:
         self._sync_attr_colors()
         color_map = {old_pal[k]: PAL[k] for k in PAL}
         self._retheme_widgets(self.root, color_map)
-        if self.theme_btn:
-            self.theme_btn.config(
-                text="☀️ Dark Mode" if not self._dark_mode else "🌙 Light Mode",
-                bg=PAL["btn_bg"], fg=PAL["text"],
-                activebackground=PAL["accent"])
-        if self.font_btn:
-            self.font_btn.config(bg=PAL["btn_bg"], fg=PAL["text"],
-                                  activebackground=PAL["accent"])
+        self._setup_ttk_style()
+        self._update_display_btns()
         self._rebuild_hero_grid()
         self._rebuild_preset_buttons()
-        if hasattr(self, "_refresh_mode_buttons"):
-            self._refresh_mode_buttons()
+        self._refresh_mode_buttons()
+        self._refresh_item_set_btns()
+        self._update_onoff_btn()
+        self._refresh_res_display()
         self.cfg["dark_mode"] = self._dark_mode
         save_config(self.cfg)
 
@@ -1190,46 +1118,61 @@ class SkadiTerminalApp:
     def toggle_font_scale(self):
         self._font_large = not self._font_large
         self._update_fonts()
-        if self.font_btn:
-            self.font_btn.config(text="🔠 Groß" if self._font_large else "🔡 Normal")
+        self._update_display_btns()
         self._rebuild_hero_grid()
         self._rebuild_preset_buttons()
         self.cfg["font_large"] = self._font_large
         save_config(self.cfg)
+        self._fit_window()
         self.status_var.set(f"Schrift: {'Groß' if self._font_large else 'Normal'}")
 
     # ──────────────────────────────────────────────────────────────────
     # Style helpers
     # ──────────────────────────────────────────────────────────────────
-    def _section(self, parent, title: str, row: int) -> tk.Frame:
+    def _section(self, parent, title: str, row: int, hint: str = "",
+                 expand: bool = False) -> tk.Frame:
+        """Abschnitt: kleine Überschrift (links Titel, rechts Hotkey-Hinweis) + Karte."""
         wrapper = tk.Frame(parent, bg=PAL["bg"])
-        wrapper.grid(row=row, column=0, sticky="ew", pady=(0,5))
+        wrapper.grid(row=row, column=0, sticky="nsew" if expand else "ew", pady=(0, 6))
         wrapper.columnconfigure(0, weight=1)
-        title_bar = tk.Frame(wrapper, bg=PAL["surface2"])
-        title_bar.grid(row=0, column=0, sticky="ew")
-        title_bar.columnconfigure(0, weight=1)
-        tk.Label(title_bar, text=f"  {title}",
-                 bg=PAL["surface2"], fg=PAL["accent"],
-                 font=self._fonts["section"], anchor="w", padx=4, pady=2
-                 ).grid(row=0, column=0, sticky="ew")
-        content = tk.Frame(wrapper, bg=PAL["surface"], padx=5, pady=5)
+        if expand:
+            wrapper.rowconfigure(1, weight=1)
+
+        header = tk.Frame(wrapper, bg=PAL["bg"])
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        header.columnconfigure(1, weight=1)
+        tk.Label(header, text=title, bg=PAL["bg"], fg=PAL["accent"],
+                 font=self._fonts["section"], anchor="w").grid(row=0, column=0, sticky="w")
+        self._last_section_hint = tk.Label(header, text=hint, bg=PAL["bg"], fg=PAL["text_dim"],
+                                           font=self._fonts["small"], anchor="e")
+        self._last_section_hint.grid(row=0, column=1, sticky="e")
+
+        content = tk.Frame(wrapper, bg=PAL["surface"], padx=6, pady=6,
+                           highlightthickness=1, highlightbackground=PAL["separator"])
         content.grid(row=1, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
-        # NOTE: wrapper.rowconfigure intentionally NOT set here —
-        # only the pick_outer section gets weight=1 explicitly
         return content
 
     def _btn(self, parent, text: str, command, accent: bool = False) -> tk.Button:
-        bg = PAL["accent"] if accent else PAL["btn_bg"]
-        fg = PAL["bg"]     if accent else PAL["text"]
         return tk.Button(parent, text=text, command=command,
-                         bg=bg, fg=fg,
-                         activebackground=PAL["accent"], activeforeground=PAL["bg"],
+                         bg=PAL["accent"] if accent else PAL["btn_bg"],
+                         fg=PAL["on_accent"] if accent else PAL["text"],
+                         activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
                          relief="flat", bd=0, cursor="hand2",
                          font=self._fonts["ui_bold" if accent else "ui"],
-                         padx=4, pady=4, highlightthickness=1,
-                         highlightbackground=PAL["separator"],
-                         highlightcolor=PAL["accent"])
+                         padx=6, pady=5, highlightthickness=0)
+
+    def _small_btn(self, parent, text: str, command) -> tk.Button:
+        return tk.Button(parent, text=text, command=command,
+                         bg=PAL["btn_bg"], fg=PAL["text"],
+                         activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
+                         relief="flat", bd=0, cursor="hand2",
+                         font=self._fonts["small"], padx=6, pady=2, highlightthickness=0)
+
+    def _toggle_btn(self, parent, command) -> tk.Button:
+        return tk.Button(parent, text="", command=command,
+                         relief="flat", bd=0, cursor="hand2",
+                         font=self._fonts["small_bold"], padx=6, pady=3, highlightthickness=0)
 
     # ──────────────────────────────────────────────────────────────────
     # Hero Grid
@@ -1242,37 +1185,25 @@ class SkadiTerminalApp:
         heroes      = _build_heroes(self.cfg.get("hero_pool",[]), self.cfg.get("custom_heroes",[]))
         current_row = 0
 
-        for attr_idx, attr in enumerate(ATTR_ORDER):
+        for attr in ATTR_ORDER:
             attr_heroes = heroes.get(attr, [])
             if not attr_heroes:
                 continue
-            color   = ATTR_COLORS[attr]
-            top_pad = 5 if attr_idx > 0 else 0
-
-            hdr = tk.Frame(self.hero_frame, bg=PAL["surface2"])
-            hdr.grid(row=current_row, column=0, columnspan=HERO_COLS, sticky="ew", pady=(top_pad,1))
-            hdr.columnconfigure(0, weight=1)
-            tk.Label(hdr, text=f"  {ATTR_ICONS[attr]}  {attr.upper()}",
-                     bg=PAL["surface2"], fg=color,
-                     font=self._fonts["section"], anchor="w", padx=4, pady=1
-                     ).grid(row=0, column=0, sticky="ew")
+            color = ATTR_COLORS[attr]
+            tk.Label(self.hero_frame, text=f"■ {ATTR_DE[attr].upper()}",
+                     bg=PAL["surface"], fg=color, font=self._fonts["section"], anchor="w"
+                     ).grid(row=current_row, column=0, columnspan=HERO_COLS, sticky="ew",
+                            pady=(0 if current_row == 0 else 6, 2))
             current_row += 1
 
-            for i, (code, _lbl) in enumerate(attr_heroes):
-                r = i // HERO_COLS
-                c = i % HERO_COLS
-                is_sel = code in self.selected_heroes
+            for i, (code, name) in enumerate(attr_heroes):
                 btn = tk.Button(self.hero_frame, text=code,
                                 command=lambda k=code: self.toggle_hero(k),
-                                bg=PAL["accent"] if is_sel else PAL["btn_bg"],
-                                fg=PAL["bg"]     if is_sel else PAL["text"],
-                                activebackground=color, activeforeground=PAL["bg"],
+                                activebackground=color, activeforeground=PAL["on_accent"],
                                 relief="flat", bd=0, cursor="hand2",
-                                font=self._fonts["hero"], padx=2, pady=3,
-                                highlightthickness=1,
-                                highlightbackground=PAL["accent"] if is_sel else PAL["separator"],
-                                highlightcolor=color)
-                btn.grid(row=current_row+r, column=c, sticky="ew", padx=1, pady=1)
+                                padx=2, pady=3, highlightthickness=0)
+                btn.grid(row=current_row + i // HERO_COLS, column=i % HERO_COLS,
+                         sticky="ew", padx=1, pady=1)
                 self.hero_buttons[code] = btn
 
             current_row += (len(attr_heroes) + HERO_COLS - 1) // HERO_COLS
@@ -1282,31 +1213,43 @@ class SkadiTerminalApp:
                 self.selected_heroes.remove(code)
         self._update_selected_label()
 
+    def _refresh_hero_buttons(self):
+        """Ausgewählte Helden hervorheben und mit ihrer Pick-Reihenfolge beschriften."""
+        order = {code: i + 1 for i, code in enumerate(self.selected_heroes)}
+        for code, btn in self.hero_buttons.items():
+            n = order.get(code)
+            btn.configure(text=f"{n}·{code}" if n else code,
+                          bg=PAL["accent"] if n else PAL["btn_bg"],
+                          fg=PAL["on_accent"] if n else PAL["text"],
+                          font=self._fonts["hero_bold" if n else "hero"])
+
     def toggle_hero(self, hero_code: str):
         if hero_code in self.selected_heroes:
             self.selected_heroes.remove(hero_code)
-            self._set_button_selected(hero_code, False)
         else:
             if len(self.selected_heroes) >= 8:
-                self.status_var.set("Max 8 Helden auswahlbar.")
+                self.status_var.set("Maximal 8 Helden — erst einen abwählen.")
                 return
             self.selected_heroes.append(hero_code)
-            self._set_button_selected(hero_code, True)
         self._update_selected_label()
 
+    def clear_selection(self):
+        self.selected_heroes = []
+        self._update_selected_label()
+        self.status_var.set("Auswahl geleert.")
+
     def _set_button_selected(self, hero_code: str, selected: bool):
-        btn = self.hero_buttons.get(hero_code)
-        if not btn: return
-        if selected:
-            btn.configure(bg=PAL["accent"], fg=PAL["bg"], highlightbackground=PAL["accent"])
-        else:
-            btn.configure(bg=PAL["btn_bg"], fg=PAL["text"], highlightbackground=PAL["separator"])
+        self._refresh_hero_buttons()
 
     def _update_selected_label(self):
-        if not self.selected_heroes:
-            self.selected_label.config(text="Auswahl (max 8):  -")
+        n = len(self.selected_heroes)
+        if not n:
+            self.selected_label.config(text="Auswahl 0/8 — Helden in Pick-Reihenfolge anklicken",
+                                       fg=PAL["text_dim"], font=self._fonts["small"])
         else:
-            self.selected_label.config(text="Auswahl (max 8):  " + "  /  ".join(self.selected_heroes))
+            self.selected_label.config(text=f"Auswahl {n}/8:  " + " → ".join(self.selected_heroes),
+                                       fg=PAL["text"], font=self._fonts["ui_bold"])
+        self._refresh_hero_buttons()
 
     # ──────────────────────────────────────────────────────────────────
     # 🎯 Hero-Pool-Manager  (komplette Held-Übersicht)
@@ -1458,8 +1401,8 @@ class SkadiTerminalApp:
 
         tk.Button(btn_row, text="✔  Speichern & Schliessen",
                   command=do_apply,
-                  bg=PAL["accent"], fg=PAL["bg"],
-                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  bg=PAL["accent"], fg=PAL["on_accent"],
+                  activebackground=PAL["success"], activeforeground=PAL["on_accent"],
                   relief="flat", bd=0, cursor="hand2",
                   font=self._fonts["big_bold"], padx=6, pady=6, highlightthickness=0
                   ).grid(row=0, column=0, sticky="ew", padx=(0,4))
@@ -1499,7 +1442,7 @@ class SkadiTerminalApp:
         edit_mode  = getattr(self, "_preset_edit_mode", False)
 
         if not presets:
-            tk.Label(self.preset_btn_frame, text="– noch keine Presets –",
+            tk.Label(self.preset_btn_frame, text="Noch keine Presets — Helden wählen, dann „＋ speichern“.",
                      bg=PAL["surface"], fg=PAL["text_dim"],
                      font=self._fonts["small"], anchor="w"
                      ).grid(row=0, column=0, sticky="w", padx=4)
@@ -1519,52 +1462,53 @@ class SkadiTerminalApp:
             save_config(self.cfg)
             self._rebuild_preset_buttons()
 
-        def _make_btn(parent, name, row, col_start):
+        def _delete(name: str):
+            if not messagebox.askyesno("Preset löschen", f"Preset '{name}' wirklich löschen?",
+                                       parent=self.root):
+                return
+            self.cfg["presets"].pop(name, None)
+            if self.cfg.get("startup_preset") == name:
+                self.cfg["startup_preset"] = ""
+            self.cfg["pinned_presets"] = [n for n in self.cfg.get("pinned_presets", []) if n != name]
+            save_config(self.cfg)
+            self._rebuild_preset_buttons()
+            self.status_var.set(f"Preset '{name}' gelöscht.")
+
+        def _make_btn(parent, name, idx):
             is_startup = (name == startup)
-            tk.Button(parent, text=name,
+            cell = tk.Frame(parent, bg=PAL["surface"])
+            cell.grid(row=idx // 3, column=idx % 3, sticky="ew",
+                      padx=(0 if idx % 3 == 0 else 2, 0 if idx % 3 == 2 else 2), pady=(0, 3))
+            cell.columnconfigure(0, weight=1)
+            tk.Button(cell, text=("★ " if is_startup else "") + name,
                       command=lambda n=name: self.load_preset(n),
-                      bg=PAL["surface2"], fg=PAL["int_col"],
-                      activebackground=PAL["int_col"], activeforeground=PAL["bg"],
+                      bg=PAL["btn_bg"], fg=PAL["int_col"],
+                      activebackground=PAL["int_col"], activeforeground=PAL["on_accent"],
                       relief="flat", bd=0, cursor="hand2",
-                      font=self._fonts["mono"],
-                      padx=2, pady=3, anchor="center",
-                      highlightthickness=1,
-                      highlightbackground=PAL["accent"] if is_startup else PAL["separator"],
-                      ).grid(row=row, column=col_start, padx=(0, 1), pady=(0, 2), sticky="ew")
-            # ⭐ Stern nur im Änderungsmodus
+                      font=self._fonts["small_bold"], padx=4, pady=3, highlightthickness=0,
+                      ).grid(row=0, column=0, sticky="ew")
             if edit_mode:
-                tk.Button(parent,
-                          text="⭐" if is_startup else "☆",
-                          command=lambda n=name: _toggle_startup(n),
-                          bg=PAL["surface2"],
-                          fg="#f0c040" if is_startup else PAL["text_dim"],
-                          activebackground=PAL["surface2"], activeforeground="#f0c040",
-                          relief="flat", bd=0, cursor="hand2",
-                          font=self._fonts["small"], padx=1, pady=3,
-                          highlightthickness=0,
-                          ).grid(row=row, column=col_start+1, padx=(0, 4), pady=(0, 2), sticky="w")
+                for col, (txt, fg, cmd) in enumerate((
+                    ("★" if is_startup else "☆", "#d9a400" if is_startup else PAL["text_dim"],
+                     lambda n=name: _toggle_startup(n)),
+                    ("✕", PAL["danger"], lambda n=name: _delete(n)),
+                ), start=1):
+                    tk.Button(cell, text=txt, command=cmd, bg=PAL["btn_bg"], fg=fg,
+                              activebackground=PAL["hover"], activeforeground=fg,
+                              relief="flat", bd=0, cursor="hand2",
+                              font=self._fonts["small_bold"], padx=4, pady=3, highlightthickness=0,
+                              ).grid(row=0, column=col, sticky="ns", padx=(1, 0))
 
-        # Spalten konfigurieren
-        for parent in [self.preset_btn_frame] + ([self._preset_extra_frame] if hasattr(self, "_preset_extra_frame") else []):
-            for c in range(6):
-                if edit_mode:
-                    parent.columnconfigure(c, weight=1 if c % 2 == 0 else 0)
-                else:
-                    parent.columnconfigure(c, weight=1 if c < 3 else 0)
+        for parent in (self.preset_btn_frame, self._preset_extra_frame):
+            parent.columnconfigure((0, 1, 2), weight=1, uniform="preset")
 
-        # Gepinnte → immer sichtbar (bis zu 3)
+        # Gepinnte → immer sichtbar (bis zu 3), Rest → aufklappbar
         visible = pinned[:3] if pinned else all_names[:3]
+        rest    = unpinned if pinned else all_names[3:]
         for i, name in enumerate(visible):
-            col = i * 2 if edit_mode else i
-            _make_btn(self.preset_btn_frame, name, 0, col)
-
-        # Rest → aufklappbar
-        if hasattr(self, "_preset_extra_frame"):
-            rest = unpinned if pinned else all_names[3:]
-            for i, name in enumerate(rest):
-                r = i // 3
-                c = (i % 3) * 2 if edit_mode else (i % 3)
-                _make_btn(self._preset_extra_frame, name, r, c)
+            _make_btn(self.preset_btn_frame, name, i)
+        for i, name in enumerate(rest):
+            _make_btn(self._preset_extra_frame, name, i)
 
     def open_preset_pin_manager(self):
         """Dialog zum Auswählen welche 3 Presets fest angezeigt werden."""
@@ -1644,8 +1588,8 @@ class SkadiTerminalApp:
             win.destroy()
 
         tk.Button(btn_row, text="✔  Speichern", command=do_save,
-                  bg=PAL["accent"], fg=PAL["bg"],
-                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  bg=PAL["accent"], fg=PAL["on_accent"],
+                  activebackground=PAL["success"], activeforeground=PAL["on_accent"],
                   relief="flat", bd=0, cursor="hand2",
                   font=self._fonts["big_bold"], padx=6, pady=5, highlightthickness=0
                   ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
@@ -1748,7 +1692,7 @@ class SkadiTerminalApp:
                     return _d
                 tk.Button(del_row, text="X", command=make_del(),
                           bg=PAL["surface"], fg=PAL["danger"],
-                          activebackground=PAL["danger"], activeforeground=PAL["bg"],
+                          activebackground=PAL["danger"], activeforeground=PAL["on_accent"],
                           relief="flat", bd=0, cursor="hand2", font=self._fonts["ui_bold"],
                           padx=6, pady=2).pack(side="right")
                 tk.Label(del_row, text="  /  ".join(phlist), bg=PAL["surface"],
@@ -1758,7 +1702,7 @@ class SkadiTerminalApp:
         btn_row.grid(row=100, column=0, columnspan=2, sticky="ew", pady=(10,0))
         btn_row.columnconfigure((0,1), weight=1)
         tk.Button(btn_row, text="Speichern", command=do_save,
-                  bg=PAL["accent"], fg=PAL["bg"], activebackground=PAL["success"],
+                  bg=PAL["accent"], fg=PAL["on_accent"], activebackground=PAL["success"],
                   relief="flat", bd=0, cursor="hand2", font=self._fonts["big_bold"],
                   padx=6, pady=5, highlightthickness=0).grid(row=0,column=0,sticky="ew",padx=(0,4))
         tk.Button(btn_row, text="Abbrechen", command=win.destroy,
@@ -1902,7 +1846,7 @@ class SkadiTerminalApp:
         rec_entry.bind("<KeyPress>", on_rec_key)
         tk.Button(rec_frame, textvariable=rec_btn_var, command=start_recording,
                   bg=PAL["btn_bg"], fg=PAL["text"],
-                  activebackground=PAL["accent"], activeforeground=PAL["bg"],
+                  activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
                   relief="flat", bd=0, cursor="hand2", font=self._fonts["ui"],
                   padx=8, pady=4, highlightthickness=1, highlightbackground=PAL["separator"]
                   ).pack(side="left", padx=(0,8))
@@ -1949,13 +1893,13 @@ class SkadiTerminalApp:
             self.cfg["pick_hotkey"] = new_hotkey
             self.cfg["game_res"]    = new_game_res
             save_config(self.cfg)
-            self.hotkey_label.config(text=_hotkey_display(new_hotkey))
+            self._update_hotkey_hint()
             self.status_var.set(f"Gespeichert.  Pick = {_hotkey_display(new_hotkey)}")
             fb_var.set("Gespeichert!")
             win.after(800, win.destroy)
 
         tk.Button(btn_row, text="Speichern", command=do_save,
-                  bg=PAL["accent"], fg=PAL["bg"], activebackground=PAL["success"],
+                  bg=PAL["accent"], fg=PAL["on_accent"], activebackground=PAL["success"],
                   relief="flat", bd=0, cursor="hand2", font=self._fonts["big_bold"],
                   padx=6, pady=5, highlightthickness=0
                   ).grid(row=0, column=0, sticky="ew", padx=(0,4))
@@ -2055,8 +1999,8 @@ class SkadiTerminalApp:
             self.status_var.set(f"Held '{code}' hinzugefuegt.")
 
         tk.Button(frm, text="  Held hinzufuegen  ", command=do_add,
-                  bg=PAL["accent"], fg=PAL["bg"],
-                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  bg=PAL["accent"], fg=PAL["on_accent"],
+                  activebackground=PAL["success"], activeforeground=PAL["on_accent"],
                   relief="flat", bd=0, cursor="hand2", font=self._fonts["big_bold"],
                   padx=6, pady=5, highlightthickness=0
                   ).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10,0))
@@ -2118,7 +2062,7 @@ class SkadiTerminalApp:
                     return _d
                 tk.Button(list_frame, text="X", command=make_del(),
                           bg=bg, fg=PAL["danger"],
-                          activebackground=PAL["danger"], activeforeground=PAL["bg"],
+                          activebackground=PAL["danger"], activeforeground=PAL["on_accent"],
                           relief="flat", bd=0, cursor="hand2",
                           font=self._fonts["ui_bold"], padx=6, pady=2
                           ).grid(row=row, column=3, sticky="ew")
@@ -2162,6 +2106,7 @@ class SkadiTerminalApp:
         def _toggle_item_phase():
             self.cfg["item_phase_enabled"] = ip_var.get()
             save_config(self.cfg)
+            self._update_onoff_btn()
 
         tk.Checkbutton(ip_frame, text="Phase C (Item-Kauf) aktiviert",
                        variable=ip_var, command=_toggle_item_phase,
@@ -2287,7 +2232,7 @@ class SkadiTerminalApp:
                 tk.Button(cell, text="🗑",
                           command=make_delete(),
                           bg=row_bg, fg=PAL["danger"],
-                          activebackground=PAL["danger"], activeforeground=PAL["bg"],
+                          activebackground=PAL["danger"], activeforeground=PAL["on_accent"],
                           relief="flat", bd=0, cursor="hand2",
                           font=self._fonts["small"], padx=4, pady=1,
                           highlightthickness=0
@@ -2326,8 +2271,8 @@ class SkadiTerminalApp:
             fb_var.set("✔ Gespeichert!")
 
         tk.Button(btn_row, text="✔  Speichern", command=do_save,
-                  bg=PAL["accent"], fg=PAL["bg"],
-                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  bg=PAL["accent"], fg=PAL["on_accent"],
+                  activebackground=PAL["success"], activeforeground=PAL["on_accent"],
                   relief="flat", bd=0, cursor="hand2",
                   font=self._fonts["big_bold"], padx=6, pady=5, highlightthickness=0
                   ).grid(row=0, column=0, sticky="ew", padx=(0,4))
@@ -2339,7 +2284,7 @@ class SkadiTerminalApp:
                   ).grid(row=0, column=1, sticky="ew", padx=(4,0))
 
         win.update_idletasks()
-        win.geometry("420x520")
+        win.geometry("460x600")
         rx = self.root.winfo_x() + self.root.winfo_width()//2  - 210
         ry = self.root.winfo_y() + self.root.winfo_height()//2 - 260
         win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
@@ -2653,7 +2598,7 @@ class SkadiTerminalApp:
                       text=f"📷  {title.split('.')[0].strip()} erfassen  (3s Countdown)",
                       command=lambda: start_capture(tpath, title.split(".")[0].strip(), sl),
                       bg=PAL["btn_bg"], fg=PAL["text"],
-                      activebackground=color, activeforeground=PAL["bg"],
+                      activebackground=color, activeforeground=PAL["on_accent"],
                       relief="flat", bd=0, cursor="hand2",
                       font=self._fonts["ui"], padx=6, pady=5, highlightthickness=0
                       ).grid(row=3, column=0, sticky="ew")
@@ -2721,6 +2666,12 @@ class SkadiTerminalApp:
                 self.kill_combo_armed = True
                 self.root.after(0, lambda: self.kill_games())
 
+        # Einfg + Entf → Steam und Discord schließen
+        if (keyboard.Key.insert in self.pressed_keys) and (keyboard.Key.delete in self.pressed_keys):
+            if not self.close_apps_armed:
+                self.close_apps_armed = True
+                self.root.after(0, lambda: self.kill_steam_discord())
+
     def _on_global_key_release(self, key):
         if key in self.pressed_keys:
             self.pressed_keys.remove(key)
@@ -2734,6 +2685,9 @@ class SkadiTerminalApp:
         if key in (keyboard.Key.page_up, keyboard.Key.page_down):
             if (keyboard.Key.page_up not in self.pressed_keys) or (keyboard.Key.page_down not in self.pressed_keys):
                 self.kill_combo_armed = False
+        if key in (keyboard.Key.insert, keyboard.Key.delete):
+            if (keyboard.Key.insert not in self.pressed_keys) or (keyboard.Key.delete not in self.pressed_keys):
+                self.close_apps_armed = False
 
     # ──────────────────────────────────────────────────────────────────
     # Auto Keys
@@ -3138,6 +3092,12 @@ class SkadiTerminalApp:
         k = kill_processes_by_name({n.lower() for n in DISCORD_PROCS})
         self.status_var.set(f"Discord gekillt: {', '.join(sorted(set(k)))}" if k else "Discord: nichts gefunden.")
 
+    def kill_steam_discord(self):
+        self.stop_all_macros()
+        k = kill_processes_by_name({n.lower() for n in STEAM_PROCS | DISCORD_PROCS})
+        self.status_var.set(f"Steam+Discord geschlossen: {', '.join(sorted(set(k)))}" if k
+                            else "Steam+Discord: nichts gefunden.")
+
     def kill_games(self):
         self.stop_all_macros()
         k = kill_processes_by_name({n.lower() for n in GAME_PROCS})
@@ -3163,9 +3123,22 @@ class SkadiTerminalApp:
     def _res_current_str(self) -> str:
         try:
             w, h, hz = _get_current_resolution()
-            return f"{w} × {h}  @  {hz} Hz"
+            return f"aktuell {w} × {h} · {hz} Hz"
         except Exception:
-            return "unbekannt"
+            return "aktuell: unbekannt"
+
+    def _refresh_res_display(self):
+        """Aktuelle Auflösung anzeigen und den passenden Button grün markieren."""
+        try:
+            cur = _get_current_resolution()
+        except Exception:
+            cur = None
+        self._res_status.config(text=self._res_current_str())
+        for mode, btn in self._res_btns.items():
+            on = cur == mode
+            btn.config(bg=PAL["success"] if on else PAL["btn_bg"],
+                       fg=PAL["on_accent"] if on else PAL["text"],
+                       font=self._fonts["ui_bold" if on else "ui"])
 
     def _set_res(self, w: int, h: int, hz: int):
         self.status_var.set(f"Ändere Auflösung auf {w}×{h} @ {hz}Hz ...")
@@ -3177,10 +3150,7 @@ class SkadiTerminalApp:
                     self.status_var.set(f"✔  Auflösung: {w}×{h} @ {hz}Hz gesetzt.")
                 else:
                     self.status_var.set(f"✗  Auflösung {w}×{h} @ {hz}Hz fehlgeschlagen.")
-                try:
-                    self._res_status.config(text=self._res_current_str())
-                except Exception:
-                    pass
+                self._refresh_res_display()
             self.root.after(0, _update)
 
         threading.Thread(target=_do, daemon=True).start()
@@ -3249,13 +3219,12 @@ def main():
         except Exception: pass
     tk.Toplevel.__init__ = _patched_init
 
-    SkadiTerminalApp(root)
+    app = SkadiTerminalApp(root)
 
     root.resizable(True, True)
-    root.minsize(470, 500)
-    root.update_idletasks()
-    # Breite fix 470, Höhe passt sich dem Inhalt an
-    root.geometry(f"470x{root.winfo_reqheight()}")
+    root.minsize(WIN_W, 500)
+    # Breite fix, Höhe passt sich dem Inhalt an
+    app._fit_window()
 
     def _front():
         try: root.attributes("-topmost", True)
