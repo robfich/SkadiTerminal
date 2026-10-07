@@ -17,6 +17,12 @@ Bilderkennung, Maus- und Tastatursteuerung brauchen den echten Bildschirm.
 | `Bild↑ + Bild↓` | Spiele schließen |
 | `F8` | Punkt bei der Koordinaten-Kalibrierung speichern |
 
+`Ende`, `Pos1` und `Strg + Einfg` wirken nur, wenn **Dota das aktive Fenster** ist – sonst tippen/klicken
+sie nicht ins falsche Programm. Laufende Enter-/Taste-4-Makros pausieren außerhalb des Spiels.
+Stop, Steam/Discord schließen und Spiele schließen gehen **immer**, egal welches Fenster vorne ist.
+
+Vom Wächter gestartet schließt sich SkadiTerminal 3 Minuten nach Spielende selbst; von Hand gestartet bleibt es offen.
+
 ## Pick-Makro (Taste `Ende`)
 
 | Phase | Was passiert |

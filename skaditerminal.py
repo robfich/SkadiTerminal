@@ -392,8 +392,8 @@ DEFAULT_CONFIG = {
     "startup_preset": "",    # Preset das beim Programmstart automatisch geladen wird
     "timings": {
         "field_click_delay":   0.15,
-        "type_duration":       4.0,
-        "enter_pause":         1.0,
+        "type_duration":       1.2,
+        "enter_pause":         0.5,
         "pick_duration":       2.0,
         "pick_click_interval": 0.05,
         "loop_pause":          0.0,
@@ -431,6 +431,12 @@ def load_config() -> dict:
                     cfg[k] = copy.deepcopy(v)
             for k, v in DEFAULT_CONFIG["timings"].items():
                 cfg["timings"].setdefault(k, v)
+            # v2: alte, langsame Standardzeiten einmalig auf die neuen setzen
+            if not cfg.get("timings_v2"):
+                t = cfg["timings"]
+                if t.get("type_duration") == 4.0: t["type_duration"] = 1.2
+                if t.get("enter_pause") == 1.0:   t["enter_pause"] = 0.5
+                cfg["timings_v2"] = True
             # Item-Templates von gterminal_* auf skadi_* umbenennen
             for s in cfg.get("item_sets", []):
                 for it in s.get("items", []):
@@ -446,6 +452,30 @@ def save_config(cfg: dict):
 # ──────────────────────────────────────────────────────────────────────────────
 # Prozess-Helpers
 # ──────────────────────────────────────────────────────────────────────────────
+def foreground_process_name() -> str | None:
+    """Prozessname des Fensters im Vordergrund (nur Windows), z. B. 'dota2.exe'."""
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        pid = ctypes.c_ulong()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return psutil.Process(pid.value).name().lower()
+    except Exception:
+        return None
+
+PICK_GAMES = {"dota2.exe"}          # Pick-Makro nur in Dota
+
+
+def game_in_foreground(games: set[str] | None = None) -> bool:
+    """
+    True, wenn ein Spiel das aktive Fenster ist. Ist das nicht feststellbar
+    (z. B. kein Windows), wird nicht blockiert.
+    """
+    name = foreground_process_name()
+    if name is None:
+        return True
+    return name in {g.lower() for g in (games or GAME_PROCS)}
+
+
 def kill_processes_by_name(names_lower: set[str]) -> list[str]:
     killed = []
     for p in psutil.process_iter(["pid", "name"]):
@@ -2947,7 +2977,11 @@ class SkadiTerminalApp:
     def _on_global_key_press(self, key):
         self.pressed_keys.add(key)
         if key == keyboard.Key.home:
-            self.root.after(0, lambda: self.start_enter()); return
+            if game_in_foreground():
+                self.root.after(0, lambda: self.start_enter())
+            else:
+                self._ui_status("Pos1 ignoriert — Dota ist nicht das aktive Fenster.")
+            return
         if key == keyboard.Key.backspace:
             self.root.after(0, lambda: self.stop_all_macros()); return
         if key == keyboard.Key.f8:
@@ -2955,7 +2989,11 @@ class SkadiTerminalApp:
 
         if (key == keyboard.Key.insert and
                 any(_pynput_matches(pk,"ctrl") for pk in self.pressed_keys)):
-            self.root.after(0, lambda: self.start_four()); return
+            if game_in_foreground():
+                self.root.after(0, lambda: self.start_four())
+            else:
+                self._ui_status("Strg+Einfg ignoriert — Dota ist nicht das aktive Fenster.")
+            return
 
         combo = self.cfg.get("pick_hotkey",["end"])
         if combo:
@@ -2964,7 +3002,10 @@ class SkadiTerminalApp:
                 for ks in combo)
             if all_pressed and not self.pick_hotkey_armed:
                 self.pick_hotkey_armed = True
-                self.root.after(0, lambda: self.start_pick_macro())
+                if game_in_foreground(PICK_GAMES):
+                    self.root.after(0, lambda: self.start_pick_macro())
+                else:
+                    self._ui_status(f"{_hotkey_display(combo)} ignoriert — Dota ist nicht das aktive Fenster.")
 
         if (keyboard.Key.page_up in self.pressed_keys) and (keyboard.Key.page_down in self.pressed_keys):
             if not self.kill_combo_armed:
@@ -3003,7 +3044,7 @@ class SkadiTerminalApp:
         self.stop_enter.clear()
         self.enter_thread = threading.Thread(target=self._enter_loop, daemon=True)
         self.enter_thread.start()
-        self.status_var.set("ENTER Auto gestartet (alle 5s).")
+        self.status_var.set("Enter alle 5 s gestartet — drückt nur, solange das Spiel im Vordergrund ist.")
 
     def start_four(self):
         if self.four_thread and self.four_thread.is_alive():
@@ -3011,7 +3052,7 @@ class SkadiTerminalApp:
         self.stop_four.clear()
         self.four_thread = threading.Thread(target=self._four_loop, daemon=True)
         self.four_thread.start()
-        self.status_var.set("Taste 4 Auto gestartet (alle 5s).")
+        self.status_var.set("Taste 4 alle 5 s gestartet — drückt nur, solange das Spiel im Vordergrund ist.")
 
     def stop_all_macros(self):
         self.stop_enter.set()
@@ -3022,7 +3063,8 @@ class SkadiTerminalApp:
     def _enter_loop(self):
         try:
             while not self.stop_enter.is_set():
-                pyautogui.press("enter")
+                if game_in_foreground():                 # sonst pausieren statt ins falsche Fenster tippen
+                    pyautogui.press("enter")
                 self._sleep_interruptible(self.stop_enter, 5.0)
         except pyautogui.FailSafeException:
             self.stop_enter.set()
@@ -3031,7 +3073,8 @@ class SkadiTerminalApp:
     def _four_loop(self):
         try:
             while not self.stop_four.is_set():
-                pyautogui.press("4")
+                if game_in_foreground():
+                    pyautogui.press("4")
                 self._sleep_interruptible(self.stop_four, 5.0)
         except pyautogui.FailSafeException:
             self.stop_four.set()
@@ -3088,6 +3131,16 @@ class SkadiTerminalApp:
     def stop_pick_macro(self):
         self.stop_pick.set()
         self.status_var.set("Pick-Macro gestoppt.")
+
+    def _wait_game_focus(self) -> bool:
+        """Wartet, bis Dota vorne ist (z. B. nach Alt+Tab). False = gestoppt."""
+        warned = False
+        while not self.stop_pick.is_set() and not game_in_foreground(PICK_GAMES):
+            if not warned:
+                self._ui_status("⏸ Pick pausiert — zurück zu Dota wechseln (BACKSPACE = Stop).")
+                warned = True
+            time.sleep(0.2)
+        return not self.stop_pick.is_set()
 
     def _ui_status(self, msg: str):
         """Statuszeile thread-sicher setzen."""
@@ -3172,6 +3225,8 @@ class SkadiTerminalApp:
             return False
 
         fx, fy = pos
+        if not self._wait_game_focus():
+            return False
         self._ui_status("Pick: Suchfeld gefunden — klicke 2x")
         pyautogui.moveTo(fx, fy, duration=0.10)
         pyautogui.click(); time.sleep(self._t("field_click_delay", 0.15)); pyautogui.click()
@@ -3210,6 +3265,8 @@ class SkadiTerminalApp:
             if self.stop_pick.is_set():
                 return None, False
             hero = heroes[idx]
+            if not self._wait_game_focus():
+                return None, False
             self._ui_status(f"Pick {idx+1}/{len(heroes)}: tippe '{hero}'  |  BACKSPACE = Stop")
 
             # Tippen
@@ -3236,11 +3293,18 @@ class SkadiTerminalApp:
             phase_end = time.monotonic() + pick_duration
             ci = 0
             while time.monotonic() < phase_end and not self.stop_pick.is_set():
+                if not self._wait_game_focus():
+                    return None, False
                 px, py = points[ci % len(points)]
                 pyautogui.moveTo(px, py, duration=0.04)
                 pyautogui.click()
                 ci += 1
                 time.sleep(pick_interval)
+                # Alle paar Klicks prüfen: PLANUNG schon da → sofort fertig
+                if has_planung and ci % 6 == 0 and self._find_on_screen(
+                        PLANUNG_TEMPLATE_PATH, 0.60, report=False):
+                    self._ui_status(f"✔ PLANUNG erkannt — '{hero}' gepickt.")
+                    return idx, True
             if self.stop_pick.is_set(): return None, False
 
             # PLANUNG = Pick hat geklappt
@@ -3491,6 +3555,8 @@ class SkadiTerminalApp:
         """Alle 30s prüfen ob ein Spiel läuft.
         Wenn 3 Minuten kein Spiel erkannt → automatisch schließen."""
         AUTO_CLOSE_SECONDS = 180
+        if "--auto" not in sys.argv:          # von Hand gestartet → offen lassen
+            return
         try:
             game_names = {n.lower() for n in GAME_PROCS}
             running = any(

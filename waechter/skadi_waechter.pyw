@@ -117,6 +117,7 @@ def terminal_already_running() -> bool:
 
 def start_terminal(path: Path):
     cmd = ["pythonw", str(path)] if path.suffix.lower() in (".pyw", ".py") else [str(path)]
+    cmd.append("--auto")       # SkadiTerminal schließt sich dann nach Spielende selbst
     subprocess.Popen(cmd, cwd=str(path.parent),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
