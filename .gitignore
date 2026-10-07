@@ -1,0 +1,8 @@
+__pycache__/
+build/
+dist/
+*.spec
+skadi_config.json
+gterminal_config.json
+debug_*.png
+skadi_debug_match.png

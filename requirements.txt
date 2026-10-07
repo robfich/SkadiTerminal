@@ -1,0 +1,7 @@
+pyautogui
+psutil
+pynput
+opencv-python
+numpy
+mss
+pyinstaller

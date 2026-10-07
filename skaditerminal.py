@@ -5,6 +5,7 @@ import time
 import threading
 import subprocess
 import shutil
+import copy
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -46,30 +47,68 @@ if getattr(sys, "frozen", False):
 else:
     _BASE_DIR = Path(__file__).parent
 
-FIELD_TEMPLATE_PATH  = _BASE_DIR / "gterminal_field.png"
-PICK_TEMPLATE_PATH   = _BASE_DIR / "gterminal_pick.png"
-AUSWAHL_TEMPLATE_PATH= _BASE_DIR / "gterminal_auswahl.png"
-PLANUNG_TEMPLATE_PATH= _BASE_DIR / "gterminal_planung.png"
-NEUTRAL_POS_PATH     = _BASE_DIR / "gterminal_neutral.png"
-ITEM_TEMPLATE_PATHS  = []
-ICON_PATH            = _BASE_DIR / "germinallogo.ico"
+APP_NAME       = "SkadiTerminal"
+_PREFIX        = "skadi"
+_LEGACY_PREFIX = "gterminal"      # alter Name (Gterminal) — wird migriert
+
+
+def _migrate_legacy_files():
+    """
+    Kopiert alte gterminal_*-Dateien (Templates, Config) einmalig auf die
+    neuen skadi_*-Namen. Kopieren statt Verschieben, damit eine alte
+    Gterminal.exe im selben Ordner weiter funktioniert.
+    """
+    legacy_dirs = [_BASE_DIR]
+    localapp = os.environ.get("LOCALAPPDATA")
+    if localapp:
+        legacy_dirs.append(Path(localapp) / "Gterminal")
+    for d in legacy_dirs:
+        try:
+            olds = list(d.glob(f"{_LEGACY_PREFIX}_*"))
+        except OSError:
+            continue
+        target_dir = _BASE_DIR if d == _BASE_DIR else d.parent / APP_NAME
+        for old in olds:
+            new = target_dir / (_PREFIX + old.name[len(_LEGACY_PREFIX):])
+            if new.exists():
+                continue
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(old, new)
+            except OSError:
+                pass
+
+_migrate_legacy_files()
+
+FIELD_TEMPLATE_PATH  = _BASE_DIR / f"{_PREFIX}_field.png"
+AUSWAHL_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_auswahl.png"
+PLANUNG_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_planung.png"
+NEUTRAL_POS_PATH     = _BASE_DIR / f"{_PREFIX}_neutral.png"
+DOPPELT_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_doppelt.png"
+ICON_PATH            = next((p for p in (_BASE_DIR / "skaditerminal.ico",
+                                         _BASE_DIR / "germinallogo.ico") if p.exists()),
+                            _BASE_DIR / "skaditerminal.ico")
+
+def _item_file(set_idx: int, item_idx: int) -> str:
+    """Dateiname des Item-Templates (beide Indizes 0-basiert)."""
+    return f"{_PREFIX}_{set_idx+1}_{item_idx+1}.png"
 
 def _get_config_path() -> Path:
     """
     Versucht, die Config neben der EXE zu speichern.
     Falls der Ordner nicht beschreibbar ist (Netzlaufwerk, OneDrive,
-    fehlende Rechte), weicht auf %LOCALAPPDATA%\\Gterminal aus.
+    fehlende Rechte), weicht auf %LOCALAPPDATA%\\SkadiTerminal aus.
     """
-    primary = _BASE_DIR / "gterminal_config.json"
-    test    = _BASE_DIR / ".gterminal_write_test"
+    primary = _BASE_DIR / f"{_PREFIX}_config.json"
+    test    = _BASE_DIR / f".{_PREFIX}_write_test"
     try:
         test.write_text("ok", encoding="utf-8")
         test.unlink(missing_ok=True)
         return primary                         # Ordner ist beschreibbar
     except Exception:
-        fallback_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Gterminal"
+        fallback_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME
         fallback_dir.mkdir(parents=True, exist_ok=True)
-        return fallback_dir / "gterminal_config.json"
+        return fallback_dir / f"{_PREFIX}_config.json"
 
 CONFIG_PATH = _get_config_path()
 
@@ -233,7 +272,6 @@ _DEFAULT_POOL = [
 
 def _build_heroes(pool: list[str], custom: list[dict]) -> dict[str, list[tuple[str, str]]]:
     """Baut die Anzeige-Heroes aus dem Pool + eigenen Helden."""
-    import copy
     pool_set = set(p.lower() for p in pool)
     heroes: dict[str, list[tuple[str, str]]] = {k: [] for k in ALL_HEROES_MASTER}
 
@@ -269,7 +307,8 @@ DEFAULT_CONFIG = {
         "pick_duration":       2.0,
         "pick_click_interval": 0.05,
         "loop_pause":          0.0,
-        "suchfeld_wait":       2.0,
+        "suchfeld_wait":       2.0,    # max. Wartezeit auf PLANUNG nach dem Pick
+        "doppel_watch":        60.0,   # Phase D: so lange nach dem Pick auf Doppel-Pick achten
     },
     "pick_hotkey":  ["end"],
     "dark_mode":    False,
@@ -279,39 +318,37 @@ DEFAULT_CONFIG = {
     # Item-Sets für Phase C (6 Sets, je bis zu 6 Items)
     "item_sets": [
         {"name": f"Set {i+1}", "items": [
-            {"label": lbl, "file": f"gterminal_{i+1}_{j+1}.png"}
+            {"label": lbl, "file": _item_file(i, j)}
             for j, lbl in enumerate(["Boots","Iron Branch","Stick","Item 4","Item 5","Item 6"])
         ]} for i in range(6)
     ],
     "active_item_set": 0,
     "item_phase_enabled": True,
+    "doppel_check_enabled": True,   # Phase D an/aus
 }
 
 def load_config() -> dict:
     if CONFIG_PATH.exists():
         try:
             cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            cfg.setdefault("custom_heroes", [])
-            cfg.setdefault("hero_pool",     list(_DEFAULT_POOL))
-            cfg.setdefault("presets",        {})
-            cfg.setdefault("pinned_presets", [])
-            cfg.setdefault("startup_preset", "")
-            cfg.setdefault("dark_mode",     False)
-            cfg.setdefault("font_large",    False)
-            cfg.setdefault("game_res",      [1920, 1200])
-            cfg.setdefault("pick_mode",          "both")
-            cfg.setdefault("item_sets",          DEFAULT_CONFIG["item_sets"])
-            cfg.setdefault("active_item_set",    0)
-            cfg.setdefault("item_phase_enabled", True)
-            cfg.setdefault("field_point",   DEFAULT_CONFIG["field_point"])
-            cfg.setdefault("timings",       DEFAULT_CONFIG["timings"])
-            cfg.setdefault("pick_hotkey",   DEFAULT_CONFIG["pick_hotkey"])
+        except Exception:
+            cfg = None
+        if isinstance(cfg, dict):
+            # Fehlende Keys mit (kopierten!) Defaults auffüllen — sonst teilen
+            # sich Config und DEFAULT_CONFIG dieselben Listen/Dicts.
+            for k, v in DEFAULT_CONFIG.items():
+                if k not in cfg:
+                    cfg[k] = copy.deepcopy(v)
             for k, v in DEFAULT_CONFIG["timings"].items():
                 cfg["timings"].setdefault(k, v)
+            # Item-Templates von gterminal_* auf skadi_* umbenennen
+            for s in cfg.get("item_sets", []):
+                for it in s.get("items", []):
+                    f = it.get("file", "")
+                    if f.startswith(_LEGACY_PREFIX + "_"):
+                        it["file"] = _PREFIX + f[len(_LEGACY_PREFIX):]
             return cfg
-        except Exception:
-            pass
-    return DEFAULT_CONFIG.copy()
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 def save_config(cfg: dict):
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
@@ -520,12 +557,54 @@ def _apply_resolution(width: int, height: int, hz: int) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Bilderkennung: Template-Cache + Screenshot pro Thread
+# ──────────────────────────────────────────────────────────────────────────────
+class _TemplateCache:
+    """Lädt Templates einmal (Graustufen) und lädt neu, wenn die Datei sich ändert."""
+    def __init__(self):
+        self._cache: dict[Path, tuple[float, object]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, path: Path):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return None
+        with self._lock:
+            hit = self._cache.get(path)
+        if hit and hit[0] == mtime:
+            return hit[1]
+        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        with self._lock:
+            self._cache[path] = (mtime, img)
+        return img
+
+_TEMPLATES = _TemplateCache()
+_screen_tls = threading.local()   # mss-Instanzen sind nicht thread-sicher
+
+def _grab_screen_gray():
+    sct = getattr(_screen_tls, "sct", None)
+    if sct is None:
+        import mss
+        sct = _screen_tls.sct = mss.mss()
+    raw = sct.grab(sct.monitors[1])
+    return cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2GRAY)
+
+def _release_screen():
+    sct = getattr(_screen_tls, "sct", None)
+    if sct is not None:
+        try: sct.close()
+        except Exception: pass
+        _screen_tls.sct = None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # GUI
 # ──────────────────────────────────────────────────────────────────────────────
-class GterminalApp:
+class SkadiTerminalApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Gterminal")
+        self.root.title(APP_NAME)
         self.cfg  = load_config()
 
         # Theme & Schriftgröße
@@ -722,6 +801,27 @@ class GterminalApp:
             )
         _update_onoff_btn()
         self._update_onoff_btn = _update_onoff_btn
+
+        def _toggle_doppel():
+            self.cfg["doppel_check_enabled"] = not self.cfg.get("doppel_check_enabled", True)
+            save_config(self.cfg)
+            _update_doppel_btn()
+
+        self._doppel_btn = tk.Button(item_row, text="",
+                  command=_toggle_doppel,
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["small"], padx=8, pady=3,
+                  highlightthickness=1, highlightbackground=PAL["separator"])
+        self._doppel_btn.grid(row=0, column=2, columnspan=2, sticky="ew", padx=(0, 4))
+
+        def _update_doppel_btn():
+            on = self.cfg.get("doppel_check_enabled", True)
+            self._doppel_btn.config(
+                text="✔ Doppel-Check AN" if on else "✗ Doppel-Check AUS",
+                bg=PAL["success"] if on else PAL["btn_bg"],
+                fg=PAL["bg"]      if on else PAL["text_dim"],
+            )
+        _update_doppel_btn()
 
         tk.Button(item_row, text="⚙",
                   command=self.open_item_set_editor,
@@ -967,14 +1067,13 @@ class GterminalApp:
         self._cfg_mode_label.grid(row=cfg_row, column=0, sticky="ew", padx=6)
 
         def _update_cfg_mode_label(*_):
-            field_ok = FIELD_TEMPLATE_PATH.exists()
-            auswahl_ok= AUSWAHL_TEMPLATE_PATH.exists()
-            coord_ok = (isinstance(self.cfg.get("pick_points"), list) and
-                        len(self.cfg.get("pick_points", [])) == 3)
+            ok = lambda b, miss="✗ fehlt": "✔" if b else miss
             lines = [
-                f"Suchfeld-Template:   {'✔' if field_ok   else '✗ fehlt'}",
-                f"Auswählen-Template:  {'✔' if auswahl_ok else '✗ fehlt'}",
-                f"Koordinaten:         {'✔' if coord_ok   else '✗ nicht kalibriert'}",
+                f"Suchfeld-Template:     {ok(FIELD_TEMPLATE_PATH.exists())}",
+                f"Auswählen-Template:    {ok(AUSWAHL_TEMPLATE_PATH.exists())}",
+                f"Planung-Template:      {ok(PLANUNG_TEMPLATE_PATH.exists())}",
+                f"Doppel-Pick-Template:  {ok(DOPPELT_TEMPLATE_PATH.exists(), '– optional')}",
+                f"Koordinaten:           {ok(self._has_coords(), '✗ nicht kalibriert')}",
             ]
             self._cfg_mode_label.config(text="\n".join(lines))
 
@@ -1707,7 +1806,9 @@ class GterminalApp:
             ("Pick-Klick-Intervall","pick_click_interval",  "s  Pause zwischen Pick-Klicks"),
             ("LOOP", None, None),
             ("Schleifenpause",      "loop_pause",           "s  Extra Pause nach jedem Helden"),
-            ("Suchfeld Wartezeit",  "suchfeld_wait",        "s  Max. warten bis Suchfeld erscheint"),
+            ("PLANUNG Wartezeit",   "suchfeld_wait",        "s  Max. warten auf PLANUNG nach dem Pick"),
+            ("DOPPEL-PICK (PHASE D)", None, None),
+            ("Prüfdauer",           "doppel_watch",         "s  So lange nach dem Pick auf Doppel-Pick achten"),
         ]
 
         field_row = 0
@@ -2116,7 +2217,7 @@ class GterminalApp:
                 lbl_var = tk.StringVar(value=item.get("label", default_labels[item_idx]))
                 set_label_vars.append(lbl_var)
 
-                item_path = _BASE_DIR / item.get("file", f"gterminal_{set_idx+1}_{item_idx+1}.png")
+                item_path = _BASE_DIR / item.get("file", _item_file(set_idx, item_idx))
                 has_tmpl  = item_path.exists()
                 row_bg    = PAL["surface"] if item_idx % 2 == 0 else PAL["btn_bg"]
 
@@ -2147,8 +2248,7 @@ class GterminalApp:
 
                 def make_capture(si=set_idx, ii=item_idx, slbl=status_lbl):
                     def _capture():
-                        fname = f"gterminal_{si+1}_{ii+1}.png"
-                        tpath = _BASE_DIR / fname
+                        tpath = _BASE_DIR / _item_file(si, ii)
                         slbl.config(text="3s...", fg=PAL["accent"])
                         win.update_idletasks()
                         def _do():
@@ -2164,7 +2264,7 @@ class GterminalApp:
 
                 def make_delete(si=set_idx, ii=item_idx, slbl=status_lbl):
                     def _delete():
-                        tpath = _BASE_DIR / f"gterminal_{si+1}_{ii+1}.png"
+                        tpath = _BASE_DIR / _item_file(si, ii)
                         try:
                             if tpath.exists():
                                 tpath.unlink()
@@ -2212,7 +2312,7 @@ class GterminalApp:
                 while len(sets[si]["items"]) < 6:
                     n = len(sets[si]["items"]) + 1
                     sets[si]["items"].append({"label": f"Item {n}",
-                                              "file":  f"gterminal_{si+1}_{n}.png"})
+                                              "file":  _item_file(si, n-1)})
                 for ii in range(6):
                     sets[si]["items"][ii]["label"] = label_vars[si][ii].get().strip()
                 # Tab-Text aktualisieren
@@ -2266,6 +2366,8 @@ class GterminalApp:
                 for tpath, label in (
                     (FIELD_TEMPLATE_PATH,   "Suchfeld"),
                     (AUSWAHL_TEMPLATE_PATH, "Auswählen"),
+                    (PLANUNG_TEMPLATE_PATH, "Planung"),
+                    (DOPPELT_TEMPLATE_PATH, "Doppel-Pick"),
                 ):
                     if not tpath.exists():
                         results.append(f"{label}: ✗ Template fehlt")
@@ -2311,7 +2413,7 @@ class GterminalApp:
                 scale     = min(1.0, 1920 / sw)
                 debug_small = cv2.resize(debug_img,
                                           (int(sw * scale), int(sh * scale)))
-                debug_path = _BASE_DIR / "gterminal_debug_match.png"
+                debug_path = _BASE_DIR / f"{_PREFIX}_debug_match.png"
                 cv2.imwrite(str(debug_path), debug_small)
 
                 msg = "  |  ".join(results) + f"  →  Debug: {debug_path.name}"
@@ -2327,63 +2429,69 @@ class GterminalApp:
         self.status_var.set("Teste Bilderkennung...")
         threading.Thread(target=_run, daemon=True).start()
 
-    def _find_on_screen(self, template_path: Path, confidence: float = 0.70):
+    def _find_on_screen(self, template_path: Path, confidence: float = 0.70,
+                        screen=None, report: bool = True):
         """
-        Screenshot via mss (native Auflösung, keine Skalierung) → Template-Match.
+        Template-Match auf dem Bildschirm (native Auflösung, keine Skalierung).
         Template und Screenshot müssen in derselben Auflösung aufgenommen worden sein.
-        Speichert ein Debug-Bild wenn kein Match gefunden wird.
+
+        screen: optional ein bereits aufgenommener Graustufen-Screenshot, damit
+                mehrere Templates gegen denselben Frame geprüft werden können.
+        report: Match-Score in der Statuszeile anzeigen.
         """
-        if not CV2_AVAILABLE or not template_path.exists():
+        if not CV2_AVAILABLE:
+            return None
+        template = _TEMPLATES.get(template_path)
+        if template is None:
             return None
         try:
-            import mss
-            with mss.mss() as sct:
-                mon = sct.monitors[1]
-                raw = sct.grab(mon)
-                screen_np = np.array(raw)
-
-            screen_bgr = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2BGR)
-            screen_g   = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
-            template   = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
-
-            if template is None:
-                self.root.after(0, lambda: self.status_var.set(
-                    f"⚠ Template konnte nicht geladen werden: {template_path.name}"))
-                return None
-
+            screen_g = screen if screen is not None else _grab_screen_gray()
             sh, sw = screen_g.shape
             th, tw = template.shape
 
             # Template darf nicht größer als Screenshot sein
             if th > sh or tw > sw:
-                self.root.after(0, lambda: self.status_var.set(
-                    f"⚠ Template ({tw}×{th}) größer als Screen ({sw}×{sh}) — neu aufnehmen!"))
+                self._ui_status(
+                    f"⚠ Template {template_path.name} ({tw}×{th}) größer als Screen ({sw}×{sh}) — neu aufnehmen!")
                 return None
 
             result = cv2.matchTemplate(screen_g, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-            # Match-Score immer in Statuszeile anzeigen
-            self.root.after(0, lambda v=max_val, p=template_path.name: self.status_var.set(
-                f"Match {p}: {v:.2f}  {'✔' if v >= confidence else '✗ zu niedrig (min ' + str(confidence) + ')'}"
-            ))
+            if report:
+                self._ui_status(
+                    f"Match {template_path.name}: {max_val:.2f}  "
+                    f"{'✔' if max_val >= confidence else f'✗ zu niedrig (min {confidence})'}")
 
             if max_val >= confidence:
-                cx = max_loc[0] + tw // 2
-                cy = max_loc[1] + th // 2
-                return (cx, cy)
-
-            # Kein Match → Debug-Bild speichern damit man sieht was der Screen zeigt
-            debug_path = _BASE_DIR / f"debug_{template_path.stem}.png"
-            try:
-                cv2.imwrite(str(debug_path), screen_bgr)
-            except Exception:
-                pass
-
+                return (max_loc[0] + tw // 2, max_loc[1] + th // 2)
         except Exception as e:
-            self.root.after(0, lambda err=e: self.status_var.set(
-                f"Bilderkennung Fehler: {err}"))
+            self._ui_status(f"Bilderkennung Fehler: {e}")
         return None
+
+    def _wait_for(self, template_path: Path, confidence: float, timeout: float,
+                  poll: float = 0.12):
+        """Sucht ein Template bis zu `timeout` Sekunden lang. Abbrechbar per Stop."""
+        if not template_path.exists():
+            return None
+        deadline = time.monotonic() + timeout
+        while not self.stop_pick.is_set():
+            pos = self._find_on_screen(template_path, confidence)
+            if pos or time.monotonic() >= deadline:
+                return pos
+            time.sleep(poll)
+        return None
+
+    def _save_debug_screenshot(self, name: str):
+        """Speichert den aktuellen Screen — nur bei endgültigem Fehlschlag, nicht pro Versuch."""
+        try:
+            import mss
+            with mss.mss() as sct:
+                raw = sct.grab(sct.monitors[1])
+            cv2.imwrite(str(_BASE_DIR / f"debug_{name}.png"),
+                        cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR))
+        except Exception:
+            pass
 
     def _capture_template(self, template_path: Path, region_w: int = 200, region_h: int = 80):
         """
@@ -2527,6 +2635,12 @@ class GterminalApp:
                   "Maus springt dorthin nach jedem Rechtsklick,\n"
                   "damit Tooltips die nächsten Items nicht verdecken.",
                   NEUTRAL_POS_PATH, PAL["agi_col"], [])
+        make_card(frm, "5. DOPPEL-PICK  (Phase D)",
+                  "Hinweis/Meldung hovern, die erscheint, wenn du und das\n"
+                  "Gegnerteam denselben Helden genommen habt.\n"
+                  "Optional: Ohne Template erkennt Phase D den Doppel-Pick daran,\n"
+                  "dass das Suchfeld zurückkommt und PLANUNG verschwindet.",
+                  DOPPELT_TEMPLATE_PATH, PAL["danger"], [])
 
         # Ordner öffnen Button
         tk.Button(frm, text="📂  Speicherordner öffnen",
@@ -2635,6 +2749,12 @@ class GterminalApp:
     # ──────────────────────────────────────────────────────────────────
     # Pick Macro
     # ──────────────────────────────────────────────────────────────────
+    def _has_coords(self) -> bool:
+        pp = self.cfg.get("pick_points")
+        fp = self.cfg.get("field_point")
+        return (isinstance(pp, list) and len(pp) == 3 and
+                isinstance(fp, list) and len(fp) == 2)
+
     def start_pick_macro(self):
         if not self.selected_heroes:
             self.status_var.set("Keine Helden ausgewaehlt."); return
@@ -2642,11 +2762,8 @@ class GterminalApp:
             self.status_var.set("Pick-Macro laeuft bereits."); return
 
         mode      = self.cfg.get("pick_mode", "both")
-        has_images= FIELD_TEMPLATE_PATH.exists() and PICK_TEMPLATE_PATH.exists() and CV2_AVAILABLE
-        has_coords= (isinstance(self.cfg.get("pick_points"), list) and
-                     len(self.cfg.get("pick_points", [])) == 3 and
-                     isinstance(self.cfg.get("field_point"), list) and
-                     len(self.cfg.get("field_point", [])) == 2)
+        has_images= FIELD_TEMPLATE_PATH.exists() and AUSWAHL_TEMPLATE_PATH.exists() and CV2_AVAILABLE
+        has_coords= self._has_coords()
 
         if mode == "image"  and not has_images:
             self.status_var.set("Modus '📷 Bild': Templates fehlen → Konfiguration > Bild-Templates."); return
@@ -2667,212 +2784,262 @@ class GterminalApp:
         self.stop_pick.set()
         self.status_var.set("Pick-Macro gestoppt.")
 
+    def _ui_status(self, msg: str):
+        """Statuszeile thread-sicher setzen."""
+        self.root.after(0, lambda m=msg: self.status_var.set(m))
+
+    def _t(self, key: str, default: float) -> float:
+        try:    return float(self.cfg.get("timings", {}).get(key, default))
+        except (TypeError, ValueError): return float(default)
+
     def _pick_macro_loop(self):
         """
-        Phase A — einmalig:
-          1. Warten bis field.png erscheint → 2x klicken → 2s warten
-             (NUR Bilderkennung, kein Koordinaten-Fallback)
-
-        Phase B — einmal durch alle Helden:
-          2. Heldennamen eintippen → ENTER → 1s warten
-          3. Auswählen suchen & klicken
-          4. 2-3 Sekunden warten bis Fenster geladen
-          5. PLANUNG prüfen:
-             - gefunden → sofort Phase C
-             - nicht gefunden → nächster Held
-
-        Phase C — Items kaufen (wenn aktiviert):
-          6. Rechtsklick auf jedes Item im aktiven Set
+        Phase A — Suchfeld finden → 2x klicken → 2s warten
+        Phase B — Helden der Reihe nach: tippen → ENTER → Auswählen klicken
+                  → auf PLANUNG warten (gefunden = Held ist gepickt)
+        Phase C — Items aus dem aktiven Set per Rechtsklick kaufen (einmalig)
+        Phase D — Doppel-Pick-Prüfung: Haben wir und das Gegnerteam denselben
+                  Helden genommen, wird der Pick zurückgesetzt. Dann geht es
+                  mit Phase A + B ab dem NÄCHSTEN Helden der Liste weiter.
         """
         try:
-            heroes    = list(self.selected_heroes)
-            pick_mode = self.cfg.get("pick_mode", "both")
-            use_img   = (pick_mode in ("image", "both")) and CV2_AVAILABLE
+            heroes     = list(dict.fromkeys(self.selected_heroes))   # ohne Duplikate
+            pick_mode  = self.cfg.get("pick_mode", "both")
+            use_img    = pick_mode in ("image", "both") and CV2_AVAILABLE
+            use_coords = pick_mode in ("coords", "both") and self._has_coords()
 
-            def _t(k, d):
-                try:    return float(self.cfg.get("timings", {}).get(k, d))
-                except: return float(d)
+            start        = 0
+            items_bought = False
+            while start < len(heroes) and not self.stop_pick.is_set():
+                if not self._phase_a_activate_field(use_img, use_coords):
+                    break
+                picked_idx, planung = self._phase_b_pick(heroes, start, use_img, use_coords)
+                if self.stop_pick.is_set():
+                    break
+                if picked_idx is None:
+                    self._ui_status("✗ Kein Held aus der Liste konnte gepickt werden.")
+                    return
+                hero = heroes[picked_idx]
 
-            # ── Phase A ───────────────────────────────────────────────
-            self.root.after(0, lambda: self.status_var.set(
-                "Pick: Warte auf Suchfeld...  |  BACKSPACE = Stop"))
+                if not items_bought:
+                    items_bought = self._phase_c_items(planung, use_img)
+                if self.stop_pick.is_set():
+                    break
 
-            if use_img and FIELD_TEMPLATE_PATH.exists():
-                # Nur Bilderkennung — kein Koordinaten-Fallback
-                while not self.stop_pick.is_set():
-                    found = self._find_on_screen(FIELD_TEMPLATE_PATH, confidence=0.65)
-                    if found:
-                        fx, fy = found
-                        break
-                    time.sleep(0.3)
-            else:
-                self.root.after(0, lambda: self.status_var.set(
-                    "⚠ Kein Suchfeld-Template — bitte 📷 Bilder kalibrieren."))
-                self.stop_pick.set()
+                if not self._phase_d_duplicate_watch(hero, use_img):
+                    if not self.stop_pick.is_set():
+                        self._ui_status(f"✔ '{hero}' gepickt — kein Doppel-Pick. Ins Spiel!")
+                    return
 
-            if self.stop_pick.is_set():
-                self.root.after(0, lambda: self.status_var.set("Pick-Macro gestoppt."))
-                return
-
-            self.root.after(0, lambda: self.status_var.set(
-                "Pick: Suchfeld gefunden — klicke 2x"))
-            fd = _t("field_click_delay", 0.15)
-            pyautogui.moveTo(fx, fy, duration=0.10)
-            pyautogui.click(); time.sleep(fd); pyautogui.click()
-
-            self.root.after(0, lambda: self.status_var.set(
-                "Pick: Suchfeld aktiviert — warte 2s..."))
-            self._sleep_interruptible(self.stop_pick, 2.0)
-            if self.stop_pick.is_set():
-                self.root.after(0, lambda: self.status_var.set("Pick-Macro gestoppt."))
-                return
-
-            # ── Phase B — einmal durch alle Helden ────────────────────
-            planung_detected = False
-            for hero_num, hero in enumerate(heroes, 1):
-                if self.stop_pick.is_set(): break
-
-                type_duration = _t("type_duration",        4.0)
-                pick_duration = _t("pick_duration",        2.0)
-                pick_interval = _t("pick_click_interval",  0.05)
-                planung_wait  = _t("suchfeld_wait",        2.5)   # Wartezeit nach Klick
-
-                self.root.after(0, lambda h=hero, n=hero_num, total=len(heroes):
-                    self.status_var.set(
-                        f"Pick {n}/{total}: tippe '{h}'  |  BACKSPACE = Stop"))
-
-                # Tippen
-                ti = (type_duration / max(len(hero), 1)) * 0.55
-                ti = max(0.05, min(ti, 0.4))
-                pyautogui.write(hero, interval=ti)
-                rem = type_duration - ti * len(hero)
-                if rem > 0: self._sleep_interruptible(self.stop_pick, rem)
-                if self.stop_pick.is_set(): break
-
-                # ENTER + 1s warten
-                pyautogui.press("enter")
-                self._sleep_interruptible(self.stop_pick, 1.0)
-                if self.stop_pick.is_set(): break
-
-                # Auswählen suchen & klicken
-                self.root.after(0, lambda: self.status_var.set(
-                    "Pick: suche 'Auswählen'..."))
-
-                if use_img and AUSWAHL_TEMPLATE_PATH.exists():
-                    deadline  = time.monotonic() + pick_duration
-                    found_auw = None
-                    while time.monotonic() < deadline and not self.stop_pick.is_set():
-                        found_auw = self._find_on_screen(AUSWAHL_TEMPLATE_PATH, confidence=0.65)
-                        if found_auw: break
-                        time.sleep(0.12)
-
-                    if found_auw:
-                        ax, ay = found_auw
-                        self.root.after(0, lambda: self.status_var.set(
-                            "Pick: ✔ Auswählen gefunden — klicke"))
-                        # Mehrfach klicken für pick_duration Sekunden → Held bestätigen
-                        phase_end = time.monotonic() + pick_duration
-                        ci = 0
-                        while time.monotonic() < phase_end and not self.stop_pick.is_set():
-                            pyautogui.moveTo(ax + (ci % 3 - 1) * 8, ay, duration=0.04)
-                            pyautogui.click()
-                            ci += 1
-                            time.sleep(pick_interval)
-                    else:
-                        self.root.after(0, lambda: self.status_var.set(
-                            "⚠ Auswählen nicht gefunden — überspringe Held"))
-                        continue   # Held überspringen, nächster
-
-                if self.stop_pick.is_set(): break
-
-                # 2-3 Sekunden warten bis Fenster geladen ist
-                self.root.after(0, lambda: self.status_var.set(
-                    "Pick: warte auf Planung-Bildschirm..."))
-                self._sleep_interruptible(self.stop_pick, planung_wait)
-                if self.stop_pick.is_set(): break
-
-                # PLANUNG prüfen
-                if use_img and PLANUNG_TEMPLATE_PATH.exists():
-                    pos_planung = self._find_on_screen(PLANUNG_TEMPLATE_PATH, confidence=0.60)
-                    if pos_planung:
-                        self.root.after(0, lambda: self.status_var.set(
-                            "✔ PLANUNG erkannt — springe zu Phase C!"))
-                        planung_detected = True
-                        break
-                    else:
-                        self.root.after(0, lambda h=hero: self.status_var.set(
-                            f"PLANUNG nicht gefunden nach '{h}' — nächster Held"))
-                        # Kein break → nächster Held
-                else:
-                    # Kein PLANUNG-Template → nach letztem Helden direkt Phase C
-                    if hero_num == len(heroes):
-                        planung_detected = True
+                start = picked_idx + 1
+                if start >= len(heroes):
+                    self._ui_status(f"⚠ Doppel-Pick bei '{hero}' — keine weiteren Helden in der Liste!")
+                    return
+                self._ui_status(f"⚠ Doppel-Pick bei '{hero}' erkannt — picke jetzt '{heroes[start]}' ...")
+                self._sleep_interruptible(self.stop_pick, 0.5)
 
             if self.stop_pick.is_set():
-                self.root.after(0, lambda: self.status_var.set("Pick-Macro gestoppt."))
-                return
-
-            # ── Phase C — Items kaufen ─────────────────────────────────
-            if not self.cfg.get("item_phase_enabled", True):
-                self.root.after(0, lambda: self.status_var.set(
-                    "✔ Pick fertig. Item-Phase deaktiviert."))
-                return
-
-            if not planung_detected:
-                self.root.after(0, lambda: self.status_var.set(
-                    "✔ Pick fertig — PLANUNG nicht erkannt, keine Items."))
-                return
-
-            self.root.after(0, lambda: self.status_var.set(
-                "Phase C: PLANUNG erkannt — kaufe Items..."))
-            time.sleep(0.5)
-
-            active_idx = self.cfg.get("active_item_set", 0)
-            item_sets  = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
-            active_set = item_sets[active_idx] if active_idx < len(item_sets) else item_sets[0]
-            items      = active_set.get("items", [])
-
-            for i, item_entry in enumerate(items):
-                if self.stop_pick.is_set(): break
-                item_file = item_entry.get("file", f"gterminal_{active_idx+1}_{i+1}.png")
-                item_label= item_entry.get("label", f"Item {i+1}")
-                item_path = _BASE_DIR / item_file
-
-                if not item_path.exists():
-                    continue  # Kein Template → überspringen
-
-                self.root.after(0, lambda lbl=item_label, n=i+1: self.status_var.set(
-                    f"Phase C: suche {n}/6 — {lbl}"))
-
-                # Item suchen
-                item_pos = None
-                if use_img:
-                    deadline = time.monotonic() + 3.0
-                    while time.monotonic() < deadline and not self.stop_pick.is_set():
-                        item_pos = self._find_on_screen(item_path, confidence=0.65)
-                        if item_pos: break
-                        time.sleep(0.2)
-
-                if item_pos:
-                    ix, iy = item_pos
-                    pyautogui.moveTo(ix, iy, duration=0.08)
-                    pyautogui.click(button="right")   # RECHTSKLICK kauft
-                    self.root.after(0, lambda lbl=item_label: self.status_var.set(
-                        f"Phase C: ✔ {lbl} gekauft (Rechtsklick)"))
-                    time.sleep(0.3)
-                else:
-                    self.root.after(0, lambda lbl=item_label: self.status_var.set(
-                        f"Phase C: ⚠ {lbl} nicht gefunden — übersprungen"))
-                    time.sleep(0.1)
-
-            if not self.stop_pick.is_set():
-                self.root.after(0, lambda: self.status_var.set(
-                    "✔ Pick & Items fertig — ins Spiel!"))
+                self._ui_status("Pick-Macro gestoppt.")
 
         except pyautogui.FailSafeException:
             self.stop_pick.set()
-            self.root.after(0, lambda: self.status_var.set(
-                "Failsafe: Pick-Macro gestoppt (Maus links-oben)."))
+            self._ui_status("Failsafe: Pick-Macro gestoppt (Maus links-oben).")
+        finally:
+            _release_screen()
+
+    # ── Phase A ───────────────────────────────────────────────────────
+    def _phase_a_activate_field(self, use_img: bool, use_coords: bool) -> bool:
+        pos = None
+        if use_img and FIELD_TEMPLATE_PATH.exists():
+            self._ui_status("Pick: Warte auf Suchfeld...  |  BACKSPACE = Stop")
+            while not self.stop_pick.is_set():
+                pos = self._find_on_screen(FIELD_TEMPLATE_PATH, confidence=0.65, report=False)
+                if pos:
+                    break
+                time.sleep(0.3)
+        elif use_coords:
+            pos = tuple(self.cfg["field_point"])
+        else:
+            self._ui_status("⚠ Kein Suchfeld-Template — bitte 📷 Bilder kalibrieren.")
+            return False
+
+        if self.stop_pick.is_set() or not pos:
+            return False
+
+        fx, fy = pos
+        self._ui_status("Pick: Suchfeld gefunden — klicke 2x")
+        pyautogui.moveTo(fx, fy, duration=0.10)
+        pyautogui.click(); time.sleep(self._t("field_click_delay", 0.15)); pyautogui.click()
+
+        self._ui_status("Pick: Suchfeld aktiviert — warte 2s...")
+        self._sleep_interruptible(self.stop_pick, 2.0)
+        return not self.stop_pick.is_set()
+
+    # ── Phase B ───────────────────────────────────────────────────────
+    def _locate_pick_button(self, use_img: bool, use_coords: bool, timeout: float):
+        """Liefert die Klickpunkte für 'Auswählen' (Bild zuerst, sonst Koordinaten)."""
+        if use_img and AUSWAHL_TEMPLATE_PATH.exists():
+            pos = self._wait_for(AUSWAHL_TEMPLATE_PATH, 0.65, timeout)
+            if pos:
+                ax, ay = pos
+                return [(ax - 8, ay), (ax, ay), (ax + 8, ay)]
+        if use_coords:
+            return [tuple(p) for p in self.cfg["pick_points"]]
+        return None
+
+    def _phase_b_pick(self, heroes: list[str], start: int,
+                      use_img: bool, use_coords: bool) -> tuple[int | None, bool]:
+        """
+        Geht die Helden ab Index `start` durch.
+        Rückgabe: (Index des gepickten Helden | None, PLANUNG erkannt?)
+        """
+        type_duration = self._t("type_duration",       4.0)
+        enter_pause   = self._t("enter_pause",         1.0)
+        pick_duration = self._t("pick_duration",       2.0)
+        pick_interval = self._t("pick_click_interval", 0.05)
+        planung_wait  = self._t("suchfeld_wait",       2.5)
+        loop_pause    = self._t("loop_pause",          0.0)
+        has_planung   = use_img and PLANUNG_TEMPLATE_PATH.exists()
+
+        for idx in range(start, len(heroes)):
+            if self.stop_pick.is_set():
+                return None, False
+            hero = heroes[idx]
+            self._ui_status(f"Pick {idx+1}/{len(heroes)}: tippe '{hero}'  |  BACKSPACE = Stop")
+
+            # Tippen
+            ti = (type_duration / max(len(hero), 1)) * 0.55
+            ti = max(0.05, min(ti, 0.4))
+            pyautogui.write(hero, interval=ti)
+            rem = type_duration - ti * len(hero)
+            if rem > 0: self._sleep_interruptible(self.stop_pick, rem)
+            if self.stop_pick.is_set(): return None, False
+
+            # ENTER
+            pyautogui.press("enter")
+            self._sleep_interruptible(self.stop_pick, enter_pause)
+            if self.stop_pick.is_set(): return None, False
+
+            # Auswählen suchen & für pick_duration Sekunden klicken
+            self._ui_status("Pick: suche 'Auswählen'...")
+            points = self._locate_pick_button(use_img, use_coords, pick_duration)
+            if not points:
+                self._ui_status(f"⚠ Auswählen nicht gefunden — überspringe '{hero}'")
+                self._save_debug_screenshot("auswahl")
+                continue
+            self._ui_status(f"Pick: ✔ Auswählen — klicke für '{hero}'")
+            phase_end = time.monotonic() + pick_duration
+            ci = 0
+            while time.monotonic() < phase_end and not self.stop_pick.is_set():
+                px, py = points[ci % len(points)]
+                pyautogui.moveTo(px, py, duration=0.04)
+                pyautogui.click()
+                ci += 1
+                time.sleep(pick_interval)
+            if self.stop_pick.is_set(): return None, False
+
+            # PLANUNG = Pick hat geklappt
+            if has_planung:
+                self._ui_status("Pick: warte auf Planung-Bildschirm...")
+                if self._wait_for(PLANUNG_TEMPLATE_PATH, 0.60, planung_wait, poll=0.25):
+                    self._ui_status(f"✔ PLANUNG erkannt — '{hero}' gepickt.")
+                    return idx, True
+                self._ui_status(f"PLANUNG nicht gefunden nach '{hero}' — nächster Held")
+            else:
+                # Ohne PLANUNG-Template kein Erfolgs-Check → alle Helden durchprobieren
+                self._sleep_interruptible(self.stop_pick, planung_wait)
+                if idx == len(heroes) - 1:
+                    return idx, True
+            if loop_pause > 0:
+                self._sleep_interruptible(self.stop_pick, loop_pause)
+
+        if has_planung:
+            self._save_debug_screenshot("planung")
+        return None, False
+
+    # ── Phase C ───────────────────────────────────────────────────────
+    def _phase_c_items(self, planung_detected: bool, use_img: bool) -> bool:
+        """Kauft das aktive Item-Set. Rückgabe: True, wenn der Kauf gelaufen ist."""
+        if not self.cfg.get("item_phase_enabled", True):
+            self._ui_status("✔ Pick fertig. Item-Phase deaktiviert.")
+            return False
+        if not planung_detected or not use_img:
+            self._ui_status("✔ Pick fertig — PLANUNG nicht erkannt, keine Items.")
+            return False
+
+        self._ui_status("Phase C: PLANUNG erkannt — kaufe Items...")
+        self._sleep_interruptible(self.stop_pick, 0.5)
+
+        active_idx = self.cfg.get("active_item_set", 0)
+        item_sets  = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
+        active_set = item_sets[active_idx] if active_idx < len(item_sets) else item_sets[0]
+        items      = active_set.get("items", [])
+
+        # Neutrale Position einmal suchen — Maus parkt dort nach jedem Kauf,
+        # damit Tooltips die nächsten Items nicht verdecken.
+        neutral = (self._find_on_screen(NEUTRAL_POS_PATH, 0.65, report=False)
+                   if NEUTRAL_POS_PATH.exists() else None)
+
+        for i, item_entry in enumerate(items):
+            if self.stop_pick.is_set(): break
+            item_path  = _BASE_DIR / item_entry.get("file", _item_file(active_idx, i))
+            item_label = item_entry.get("label", f"Item {i+1}")
+            if not item_path.exists():
+                continue  # Kein Template → überspringen
+
+            self._ui_status(f"Phase C: suche {i+1}/{len(items)} — {item_label}")
+            item_pos = self._wait_for(item_path, 0.65, 3.0, poll=0.2)
+            if item_pos:
+                pyautogui.moveTo(*item_pos, duration=0.08)
+                pyautogui.click(button="right")   # RECHTSKLICK kauft
+                self._ui_status(f"Phase C: ✔ {item_label} gekauft (Rechtsklick)")
+                if neutral:
+                    pyautogui.moveTo(*neutral, duration=0.05)
+                time.sleep(0.3)
+            else:
+                self._ui_status(f"Phase C: ⚠ {item_label} nicht gefunden — übersprungen")
+                time.sleep(0.1)
+        return True
+
+    # ── Phase D ───────────────────────────────────────────────────────
+    def _phase_d_duplicate_watch(self, hero: str, use_img: bool) -> bool:
+        """
+        Beobachtet nach dem Pick den Bildschirm, ob unser Held auch vom
+        Gegnerteam genommen wurde (Doppel-Pick → Pick wird zurückgesetzt).
+
+        Signale:
+          1. Doppel-Pick-Template (skadi_doppelt.png) ist sichtbar
+          2. Das Helden-Suchfeld ist wieder da UND PLANUNG ist weg
+             (3x hintereinander, damit kurzes Flackern nicht auslöst)
+
+        Rückgabe: True = Doppel-Pick erkannt → neu picken.
+        """
+        if not self.cfg.get("doppel_check_enabled", True) or not use_img:
+            return False
+        has_doppelt = DOPPELT_TEMPLATE_PATH.exists()
+        has_field   = FIELD_TEMPLATE_PATH.exists() and PLANUNG_TEMPLATE_PATH.exists()
+        if not (has_doppelt or has_field):
+            return False
+
+        watch    = self._t("doppel_watch", 60.0)
+        deadline = time.monotonic() + watch
+        hits     = 0
+        self._ui_status(f"Phase D: prüfe Doppel-Pick für '{hero}' ({watch:.0f}s)  |  BACKSPACE = Stop")
+        while time.monotonic() < deadline and not self.stop_pick.is_set():
+            screen = _grab_screen_gray()
+            if has_doppelt and self._find_on_screen(DOPPELT_TEMPLATE_PATH, 0.70,
+                                                    screen=screen, report=False):
+                return True
+            if has_field:
+                field_back = self._find_on_screen(FIELD_TEMPLATE_PATH, 0.65,
+                                                  screen=screen, report=False)
+                planung    = field_back and self._find_on_screen(PLANUNG_TEMPLATE_PATH, 0.60,
+                                                                 screen=screen, report=False)
+                hits = hits + 1 if (field_back and not planung) else 0
+                if hits >= 3:
+                    return True
+            time.sleep(0.4)
+        return False
 
     # ──────────────────────────────────────────────────────────────────
     # Kalibrierung (Koordinaten)
@@ -3031,7 +3198,7 @@ def main():
     root = tk.Tk()
 
     try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Gterminal.App.1.0")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SkadiTerminal.App.1.0")
     except Exception:
         pass
 
@@ -3045,7 +3212,7 @@ def main():
         except Exception: pass
     tk.Toplevel.__init__ = _patched_init
 
-    GterminalApp(root)
+    SkadiTerminalApp(root)
 
     root.resizable(True, True)
     root.minsize(470, 500)
