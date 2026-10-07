@@ -1,5 +1,7 @@
 # SkadiTerminal
 
+<img src="skaditerminal_1024.png" width="96" alt="Logo">
+
 Dota-2-Helfer für Windows (früher **Gterminal**). Läuft lokal auf dem Gaming-PC –
 Bilderkennung, Maus- und Tastatursteuerung brauchen den echten Bildschirm.
 
@@ -24,7 +26,7 @@ an/aus über den Button „Doppel-Check“ im Pick-Tab.
 ```bat
 build.bat
 ```
-Ergebnis: `dist\SkadiTerminal.exe`. Templates (`skadi_*.png`) und
+Ergebnis: `dist\SkadiTerminal.exe` (Logo `skaditerminal.ico` ist eingebaut). Templates (`skadi_*.png`) und
 `skadi_config.json` liegen neben der EXE.
 
 ## Umstieg von Gterminal

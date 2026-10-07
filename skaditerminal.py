@@ -85,7 +85,9 @@ AUSWAHL_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_auswahl.png"
 PLANUNG_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_planung.png"
 NEUTRAL_POS_PATH     = _BASE_DIR / f"{_PREFIX}_neutral.png"
 DOPPELT_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_doppelt.png"
+_BUNDLE_DIR          = Path(getattr(sys, "_MEIPASS", _BASE_DIR))   # in die EXE gepackte Dateien
 ICON_PATH            = next((p for p in (_BASE_DIR / "skaditerminal.ico",
+                                         _BUNDLE_DIR / "skaditerminal.ico",
                                          _BASE_DIR / "germinallogo.ico") if p.exists()),
                             _BASE_DIR / "skaditerminal.ico")
 
