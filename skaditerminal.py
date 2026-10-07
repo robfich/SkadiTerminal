@@ -51,40 +51,102 @@ APP_NAME       = "SkadiTerminal"
 _PREFIX        = "skadi"
 _LEGACY_PREFIX = "gterminal"      # alter Name (Gterminal) — wird migriert
 
+# Projektordner im Google Drive (unter "Meine Ablage")
+GDRIVE_PROJECT_DIR = Path("_060_Projekte") / "_010_Aktiv"
+
+
+def _find_gdrive_root() -> Path | None:
+    """Google Drive für Desktop: 'Meine Ablage' bzw. 'My Drive' auf irgendeinem Laufwerk."""
+    if os.name != "nt":
+        return None
+    for letter in "GHIJKLMNOPQRSTUVWXYZDEF":
+        for name in ("Meine Ablage", "My Drive"):
+            p = Path(f"{letter}:/") / name
+            try:
+                if p.is_dir():
+                    return p
+            except OSError:
+                pass
+    return None
+
+_GDRIVE = _find_gdrive_root()
+
+
+def _resolve_data_dir() -> Path:
+    """
+    Datenordner für Templates, Config und Debug-Bilder — auf jedem PC derselbe,
+    egal wo die EXE liegt:
+      1. Umgebungsvariable SKADI_DATA_DIR
+      2. Datei skadi_datenordner.txt neben der EXE (enthält einen Ordnerpfad)
+      3. Google Drive: <Laufwerk>:\\Meine Ablage\\_060_Projekte\\_010_Aktiv\\SkadiTerminal
+      4. Ordner der EXE
+    Ist der Ordner nicht beschreibbar, wird %LOCALAPPDATA%\\SkadiTerminal benutzt.
+    """
+    candidates = []
+    if os.environ.get("SKADI_DATA_DIR"):
+        candidates.append(Path(os.environ["SKADI_DATA_DIR"]))
+    try:
+        txt = (_BASE_DIR / f"{_PREFIX}_datenordner.txt").read_text(encoding="utf-8").strip()
+        if txt:
+            candidates.append(Path(txt))
+    except OSError:
+        pass
+    if _GDRIVE:
+        candidates.append(_GDRIVE / GDRIVE_PROJECT_DIR / APP_NAME)
+    candidates.append(_BASE_DIR)
+    candidates.append(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME)
+
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            test = d / f".{_PREFIX}_write_test"
+            test.write_text("ok", encoding="utf-8")
+            test.unlink(missing_ok=True)
+            return d
+        except OSError:
+            continue
+    return _BASE_DIR
+
+DATA_DIR = _resolve_data_dir()
+
 
 def _migrate_legacy_files():
     """
-    Kopiert alte gterminal_*-Dateien (Templates, Config) einmalig auf die
-    neuen skadi_*-Namen. Kopieren statt Verschieben, damit eine alte
-    Gterminal.exe im selben Ordner weiter funktioniert.
+    Holt beim Start fehlende Templates/Config in den Datenordner:
+    alte gterminal_*-Dateien (→ skadi_*) und skadi_*-Dateien, die noch neben der
+    EXE liegen. Es wird nur kopiert, nie verschoben oder überschrieben.
     """
-    legacy_dirs = [_BASE_DIR]
-    localapp = os.environ.get("LOCALAPPDATA")
-    if localapp:
-        legacy_dirs.append(Path(localapp) / "Gterminal")
-    for d in legacy_dirs:
+    sources = [DATA_DIR, _BASE_DIR]
+    if _GDRIVE:
+        sources += [_GDRIVE / GDRIVE_PROJECT_DIR / "Dota2_Draft_Helfer_Maerz",
+                    _GDRIVE / GDRIVE_PROJECT_DIR / "gterminal26"]
+    if os.environ.get("LOCALAPPDATA"):
+        sources.append(Path(os.environ["LOCALAPPDATA"]) / "Gterminal")
+    for d in sources:
         try:
-            olds = list(d.glob(f"{_LEGACY_PREFIX}_*"))
+            files = [f for f in d.iterdir() if f.is_file()
+                     and f.name.startswith((_LEGACY_PREFIX + "_", _PREFIX + "_"))
+                     and "_debug" not in f.name]
         except OSError:
             continue
-        target_dir = _BASE_DIR if d == _BASE_DIR else d.parent / APP_NAME
-        for old in olds:
-            new = target_dir / (_PREFIX + old.name[len(_LEGACY_PREFIX):])
-            if new.exists():
+        for f in files:
+            name = (_PREFIX + f.name[len(_LEGACY_PREFIX):]
+                    if f.name.startswith(_LEGACY_PREFIX + "_") else f.name)
+            target = DATA_DIR / name
+            if target.exists() or target == f:
                 continue
             try:
-                target_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(old, new)
+                shutil.copy2(f, target)
             except OSError:
                 pass
 
 _migrate_legacy_files()
 
-FIELD_TEMPLATE_PATH  = _BASE_DIR / f"{_PREFIX}_field.png"
-AUSWAHL_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_auswahl.png"
-PLANUNG_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_planung.png"
-NEUTRAL_POS_PATH     = _BASE_DIR / f"{_PREFIX}_neutral.png"
-DOPPELT_TEMPLATE_PATH= _BASE_DIR / f"{_PREFIX}_doppelt.png"
+FIELD_TEMPLATE_PATH  = DATA_DIR / f"{_PREFIX}_field.png"
+AUSWAHL_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_auswahl.png"
+PLANUNG_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_planung.png"
+NEUTRAL_POS_PATH     = DATA_DIR / f"{_PREFIX}_neutral.png"
+DOPPELT_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_doppelt.png"
 _BUNDLE_DIR          = Path(getattr(sys, "_MEIPASS", _BASE_DIR))   # in die EXE gepackte Dateien
 ICON_PATH            = next((p for p in (_BASE_DIR / "skaditerminal.ico",
                                          _BUNDLE_DIR / "skaditerminal.ico",
@@ -96,21 +158,7 @@ def _item_file(set_idx: int, item_idx: int) -> str:
     return f"{_PREFIX}_{set_idx+1}_{item_idx+1}.png"
 
 def _get_config_path() -> Path:
-    """
-    Versucht, die Config neben der EXE zu speichern.
-    Falls der Ordner nicht beschreibbar ist (Netzlaufwerk, OneDrive,
-    fehlende Rechte), weicht auf %LOCALAPPDATA%\\SkadiTerminal aus.
-    """
-    primary = _BASE_DIR / f"{_PREFIX}_config.json"
-    test    = _BASE_DIR / f".{_PREFIX}_write_test"
-    try:
-        test.write_text("ok", encoding="utf-8")
-        test.unlink(missing_ok=True)
-        return primary                         # Ordner ist beschreibbar
-    except Exception:
-        fallback_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-        return fallback_dir / f"{_PREFIX}_config.json"
+    return DATA_DIR / f"{_PREFIX}_config.json"
 
 CONFIG_PATH = _get_config_path()
 
@@ -962,13 +1010,13 @@ class SkadiTerminalApp:
         self._update_cfg_mode_label = _update_cfg_mode_label
         nb.bind("<<NotebookTabChanged>>", lambda e: (_update_cfg_mode_label(), self._fit_window()))
 
-        tk.Label(tab_cfg, text=f"Programmordner: {_BASE_DIR}", bg=PAL["surface"], fg=PAL["text_dim"],
+        tk.Label(tab_cfg, text=f"Datenordner (Templates, Config): {DATA_DIR}", bg=PAL["surface"], fg=PAL["text_dim"],
                  font=self._fonts["small"], anchor="w", justify="left", wraplength=420
                  ).grid(row=cfg_row, column=0, columnspan=2, sticky="ew", pady=(6, 2))
         cfg_row += 1
         cfg_buttons([
             ("Alte Templates importieren …", self.import_templates),
-            ("Programmordner öffnen",        lambda: open_folder(str(_BASE_DIR))),
+            ("Datenordner öffnen",           lambda: open_folder(str(DATA_DIR))),
         ])
 
         # ── AUFLÖSUNG (immer sichtbar) ────────────────────────────────
@@ -2175,7 +2223,7 @@ class SkadiTerminalApp:
                 lbl_var = tk.StringVar(value=item.get("label", default_labels[item_idx]))
                 set_label_vars.append(lbl_var)
 
-                item_path = _BASE_DIR / item.get("file", _item_file(set_idx, item_idx))
+                item_path = DATA_DIR / item.get("file", _item_file(set_idx, item_idx))
                 has_tmpl  = item_path.exists()
                 row_bg    = PAL["surface"] if item_idx % 2 == 0 else PAL["btn_bg"]
 
@@ -2206,7 +2254,7 @@ class SkadiTerminalApp:
 
                 def make_capture(si=set_idx, ii=item_idx, slbl=status_lbl):
                     def _capture():
-                        tpath = _BASE_DIR / _item_file(si, ii)
+                        tpath = DATA_DIR / _item_file(si, ii)
                         slbl.config(text="3s...", fg=PAL["accent"])
                         win.update_idletasks()
                         def _do():
@@ -2222,7 +2270,7 @@ class SkadiTerminalApp:
 
                 def make_delete(si=set_idx, ii=item_idx, slbl=status_lbl):
                     def _delete():
-                        tpath = _BASE_DIR / _item_file(si, ii)
+                        tpath = DATA_DIR / _item_file(si, ii)
                         try:
                             if tpath.exists():
                                 tpath.unlink()
@@ -2309,8 +2357,8 @@ class SkadiTerminalApp:
         if not src:
             return
         src = Path(src)
-        if src.resolve() == _BASE_DIR.resolve():
-            self.status_var.set("Das ist bereits der Programmordner.")
+        if src.resolve() == DATA_DIR.resolve():
+            self.status_var.set("Das ist bereits der Datenordner.")
             return
 
         def _new_name(name: str) -> str:
@@ -2327,13 +2375,13 @@ class SkadiTerminalApp:
             return
 
         overwrite = True
-        if any((_BASE_DIR / _new_name(f.name)).exists() for f in pngs):
+        if any((DATA_DIR / _new_name(f.name)).exists() for f in pngs):
             overwrite = messagebox.askyesno("Templates ersetzen?",
                                             "Einige Templates gibt es hier schon.\nMit den importierten ersetzen?",
                                             parent=self.root)
         copied = 0
         for f in pngs:
-            target = _BASE_DIR / _new_name(f.name)
+            target = DATA_DIR / _new_name(f.name)
             if target.exists() and not overwrite:
                 continue
             try:
@@ -2475,14 +2523,14 @@ class SkadiTerminalApp:
                 scale     = min(1.0, 1920 / sw)
                 debug_small = cv2.resize(debug_img,
                                           (int(sw * scale), int(sh * scale)))
-                debug_path = _BASE_DIR / f"{_PREFIX}_debug_match.png"
+                debug_path = DATA_DIR / f"{_PREFIX}_debug_match.png"
                 cv2.imwrite(str(debug_path), debug_small)
 
                 msg = "  |  ".join(results) + f"  →  Debug: {debug_path.name}"
                 self.root.after(0, lambda m=msg: self.status_var.set(m))
 
                 # Ordner öffnen
-                self.root.after(200, lambda: open_folder(str(_BASE_DIR)))
+                self.root.after(200, lambda: open_folder(str(DATA_DIR)))
 
             except Exception as e:
                 self.root.after(0, lambda err=e: self.status_var.set(
@@ -2550,7 +2598,7 @@ class SkadiTerminalApp:
             import mss
             with mss.mss() as sct:
                 raw = sct.grab(sct.monitors[1])
-            cv2.imwrite(str(_BASE_DIR / f"debug_{name}.png"),
+            cv2.imwrite(str(DATA_DIR / f"debug_{name}.png"),
                         cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR))
         except Exception:
             pass
@@ -2625,7 +2673,7 @@ class SkadiTerminalApp:
 
         # Speicherort-Info
         tk.Label(frm,
-                 text=f"Templates werden gespeichert in:\n  {_BASE_DIR}",
+                 text=f"Templates werden gespeichert in:\n  {DATA_DIR}",
                  bg=PAL["surface"], fg=PAL["text_dim"],
                  font=self._fonts["small"], anchor="w", justify="left"
                  ).pack(fill="x", pady=(0, 6))
@@ -2706,7 +2754,7 @@ class SkadiTerminalApp:
 
         # Ordner öffnen Button
         tk.Button(frm, text="📂  Speicherordner öffnen",
-                  command=lambda: open_folder(str(_BASE_DIR)),
+                  command=lambda: open_folder(str(DATA_DIR)),
                   bg=PAL["btn_bg"], fg=PAL["text"],
                   activebackground=PAL["surface2"], activeforeground=PAL["accent"],
                   relief="flat", bd=0, cursor="hand2",
@@ -3053,7 +3101,7 @@ class SkadiTerminalApp:
 
         for i, item_entry in enumerate(items):
             if self.stop_pick.is_set(): break
-            item_path  = _BASE_DIR / item_entry.get("file", _item_file(active_idx, i))
+            item_path  = DATA_DIR / item_entry.get("file", _item_file(active_idx, i))
             item_label = item_entry.get("label", f"Item {i+1}")
             if not item_path.exists():
                 continue  # Kein Template → überspringen

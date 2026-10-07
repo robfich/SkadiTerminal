@@ -44,16 +44,30 @@ an/aus über den Button „Doppel-Check“ im Pick-Tab.
    nacheinander im Vollbild bei 100 % öffnen.
 3. Normales Spiel (gern Lobby mit Bots): Ablauf A → B → C → D in der Statuszeile verfolgen.
 
+## Wo liegen Templates und Einstellungen?
+
+Im **Google Drive**, nicht neben der EXE – damit jeder PC dieselben Bilder, Presets und Item-Sets hat:
+
+```
+<Laufwerk>:\Meine Ablage\_060_Projekte\_010_Aktiv\SkadiTerminal\
+    skadi_field.png, skadi_auswahl.png, skadi_planung.png, …   (Templates)
+    skadi_config.json                                           (Presets, Item-Sets, Zeiten)
+```
+
+Das Laufwerk (meist `G:`) sucht SkadiTerminal selbst. Die EXE kann irgendwo liegen.
+Beim ersten Start holt es fehlende Dateien automatisch aus `Dota2_Draft_Helfer_Maerz` bzw.
+`gterminal26` (aus `gterminal_*` wird `skadi_*`; kopiert, nichts wird gelöscht).
+
+Anderer Ordner gewünscht? Eine Textdatei `skadi_datenordner.txt` mit dem Pfad neben die EXE legen.
+Ohne Google Drive wird der Ordner der EXE benutzt.
+
+**Hinweis:** Templates passen nur zur Auflösung, in der sie aufgenommen wurden.
+Hat ein anderer PC eine andere Spielauflösung, dort einmal neu aufnehmen.
+
 ## Bauen
 
 ```bat
 build.bat
 ```
-Ergebnis: `dist\SkadiTerminal.exe` (Logo `skaditerminal.ico` ist eingebaut). Templates (`skadi_*.png`) und
-`skadi_config.json` liegen neben der EXE.
-
-## Umstieg von Gterminal
-
-Beim ersten Start werden vorhandene `gterminal_*.png` und `gterminal_config.json`
-automatisch nach `skadi_*` **kopiert** (die alten Dateien bleiben). Im Launcher,
-der Dota überwacht, den EXE-Namen auf `SkadiTerminal.exe` ändern.
+Ergebnis: `dist\SkadiTerminal.exe` (Logo ist eingebaut). Am besten nach
+`…\_010_Aktiv\SkadiTerminal\` kopieren – dort sucht sie auch der Spielstart-Wächter.
