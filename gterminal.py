@@ -1,0 +1,3069 @@
+import os
+import sys
+import json
+import time
+import threading
+import subprocess
+import shutil
+from pathlib import Path
+import tkinter as tk
+from tkinter import ttk, messagebox
+import tkinter.font as tkfont
+
+import ctypes
+import pyautogui
+import psutil
+from pynput import keyboard
+import webbrowser
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DPI-Awareness  (muss VOR allem anderen gesetzt werden)
+# ──────────────────────────────────────────────────────────────────────────────
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+pyautogui.FAILSAFE = True
+
+# Bilderkennungs-Imports
+try:
+    import cv2
+    import numpy as np
+    import mss as _mss_check   # Verfügbarkeit prüfen
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pfade
+# ──────────────────────────────────────────────────────────────────────────────
+if getattr(sys, "frozen", False):
+    _BASE_DIR = Path(sys.executable).parent
+else:
+    _BASE_DIR = Path(__file__).parent
+
+FIELD_TEMPLATE_PATH  = _BASE_DIR / "gterminal_field.png"
+PICK_TEMPLATE_PATH   = _BASE_DIR / "gterminal_pick.png"
+AUSWAHL_TEMPLATE_PATH= _BASE_DIR / "gterminal_auswahl.png"
+PLANUNG_TEMPLATE_PATH= _BASE_DIR / "gterminal_planung.png"
+NEUTRAL_POS_PATH     = _BASE_DIR / "gterminal_neutral.png"
+ITEM_TEMPLATE_PATHS  = []
+ICON_PATH            = _BASE_DIR / "germinallogo.ico"
+
+def _get_config_path() -> Path:
+    """
+    Versucht, die Config neben der EXE zu speichern.
+    Falls der Ordner nicht beschreibbar ist (Netzlaufwerk, OneDrive,
+    fehlende Rechte), weicht auf %LOCALAPPDATA%\\Gterminal aus.
+    """
+    primary = _BASE_DIR / "gterminal_config.json"
+    test    = _BASE_DIR / ".gterminal_write_test"
+    try:
+        test.write_text("ok", encoding="utf-8")
+        test.unlink(missing_ok=True)
+        return primary                         # Ordner ist beschreibbar
+    except Exception:
+        fallback_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Gterminal"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        return fallback_dir / "gterminal_config.json"
+
+CONFIG_PATH = _get_config_path()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Prozesse
+# ──────────────────────────────────────────────────────────────────────────────
+STEAM_PROCS   = {"steam.exe", "steamwebhelper.exe"}
+GAME_PROCS    = {"dota2.exe", "cs2.exe", "pioneergame.exe"}
+DISCORD_PROCS = {"discord.exe", "discordcanary.exe", "discordptb.exe"}
+D2_SETTINGS_PATH = r"G:\Meine Ablage\D2 Setting"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# KOMPLETTE HELDEN-LISTE  (Dota 2 Stand 2025)
+# ──────────────────────────────────────────────────────────────────────────────
+# Stärke → Strength | Beweglichkeit → Agility | Intelligenz → Intelligence
+ALL_HEROES_MASTER: dict[str, list[tuple[str, str]]] = {
+    "Strength": [
+        ("aba",     "Abaddon"),
+        ("alch",    "Alchemist"),
+        ("axe",     "Axe"),
+        ("bb",      "Bristleback"),
+        ("cent",    "Centaur Warrunner"),
+        ("ck",      "Chaos Knight"),
+        ("db",      "Dawnbreaker"),
+        ("doom",    "Doom"),
+        ("dk",      "Dragon Knight"),
+        ("esp",     "Earth Spirit"),
+        ("esh",     "Earthshaker"),
+        ("et",      "Elder Titan"),
+        ("huskar",  "Huskar"),
+        ("kunkka",  "Kunkka"),
+        ("largo",   "Largo"),
+        ("lc",      "Legion Commander"),
+        ("ls",      "Lifestealer"),
+        ("mars",    "Mars"),
+        ("ns",      "Night Stalker"),
+        ("ogre",    "Ogre Magi"),
+        ("omni",    "Omniknight"),
+        ("pb",      "Primal Beast"),
+        ("pudge",   "Pudge"),
+        ("snap",    "Snapfire"),
+        ("sb",      "Spirit Breaker"),
+        ("sven",    "Sven"),
+        ("tide",    "Tidehunter"),
+        ("timber",  "Timbersaw"),
+        ("tiny",    "Tiny"),
+        ("treant",  "Treant Protector"),
+        ("tusk",    "Tusk"),
+        ("ul",      "Underlord"),
+        ("undying", "Undying"),
+        ("wk",      "Wraith King"),
+    ],
+    "Agility": [
+        ("am",      "Anti-Mage"),
+        ("bs",      "Bloodseeker"),
+        ("bh",      "Bounty Hunter"),
+        ("brood",   "Broodmother"),
+        ("clinkz",  "Clinkz"),
+        ("drow",    "Drow Ranger"),
+        ("ember",   "Ember Spirit"),
+        ("fv",      "Faceless Void"),
+        ("gyro",    "Gyrocopter"),
+        ("hw",      "Hoodwink"),
+        ("jugg",    "Juggernaut"),
+        ("kez",     "Kez"),
+        ("luna",    "Luna"),
+        ("dusa",    "Medusa"),
+        ("meepo",   "Meepo"),
+        ("mk",      "Monkey King"),
+        ("morph",   "Morphling"),
+        ("naga",    "Naga Siren"),
+        ("pa",      "Phantom Assassin"),
+        ("pl",      "Phantom Lancer"),
+        ("razor",   "Razor"),
+        ("riki",    "Riki"),
+        ("rm",      "Ringmaster"),
+        ("sf",      "Shadow Fiend"),
+        ("slark",   "Slark"),
+        ("sniper",  "Sniper"),
+        ("spec",    "Spectre"),
+        ("ta",      "Templar Assassin"),
+        ("tb",      "Terrorblade"),
+        ("troll",   "Troll Warlord"),
+        ("ursa",    "Ursa"),
+        ("weaver",  "Weaver"),
+    ],
+    "Intelligence": [
+        ("aa",       "Ancient Apparition"),
+        ("cm",       "Crystal Maiden"),
+        ("dp",       "Death Prophet"),
+        ("disruptor","Disruptor"),
+        ("ench",     "Enchantress"),
+        ("grim",     "Grimstroke"),
+        ("jakiro",   "Jakiro"),
+        ("kotl",     "Keeper of the Light"),
+        ("lesh",     "Leshrac"),
+        ("lich",     "Lich"),
+        ("lina",     "Lina"),
+        ("lion",     "Lion"),
+        ("muerta",   "Muerta"),
+        ("np",       "Nature's Prophet"),
+        ("oracle",   "Oracle"),
+        ("od",       "Outworld Destroyer"),
+        ("puck",     "Puck"),
+        ("pugna",    "Pugna"),
+        ("qop",      "Queen of Pain"),
+        ("rubick",   "Rubick"),
+        ("sd",       "Shadow Demon"),
+        ("ss",       "Shadow Shaman"),
+        ("silencer", "Silencer"),
+        ("sky",      "Skywrath Mage"),
+        ("storm",    "Storm Spirit"),
+        ("tinker",   "Tinker"),
+        ("warlock",  "Warlock"),
+        ("wd",       "Witch Doctor"),
+        ("zeus",     "Zeus"),
+    ],
+    "Universal": [
+        ("arc",     "Arc Warden"),
+        ("bane",    "Bane"),
+        ("bat",     "Batrider"),
+        ("bm",      "Beastmaster"),
+        ("brew",    "Brewmaster"),
+        ("chen",    "Chen"),
+        ("clock",   "Clockwerk"),
+        ("ds",      "Dark Seer"),
+        ("dw",      "Dark Willow"),
+        ("dazzle",  "Dazzle"),
+        ("enigma",  "Enigma"),
+        ("invo",    "Invoker"),
+        ("io",      "Io"),
+        ("ld",      "Lone Druid"),
+        ("lycan",   "Lycan"),
+        ("mag",     "Magnus"),
+        ("marci",   "Marci"),
+        ("mirana",  "Mirana"),
+        ("necro",   "Necrophos"),
+        ("nyx",     "Nyx Assassin"),
+        ("pango",   "Pangolier"),
+        ("phoenix", "Phoenix"),
+        ("sk",      "Sand King"),
+        ("techies", "Techies"),
+        ("venge",   "Vengeful Spirit"),
+        ("veno",    "Venomancer"),
+        ("viper",   "Viper"),
+        ("visage",  "Visage"),
+        ("vs",      "Void Spirit"),
+        ("wr",      "Windranger"),
+        ("ww",      "Winter Wyvern"),
+        ("slardar", "Slardar"),
+    ],
+}
+
+# Standard-Pool (beim ersten Start)
+_DEFAULT_POOL = [
+    "wk","pudge","kunkka","mars","tusk","tide","ogre","slardar","snap",
+    "sniper","drow","weaver","gyro","pa","mk","luna","jugg","fv","sf",
+    "lion","lina","muerta","jakiro","silencer","wd","aa","lich",
+    "invo","necro",
+]
+
+def _build_heroes(pool: list[str], custom: list[dict]) -> dict[str, list[tuple[str, str]]]:
+    """Baut die Anzeige-Heroes aus dem Pool + eigenen Helden."""
+    import copy
+    pool_set = set(p.lower() for p in pool)
+    heroes: dict[str, list[tuple[str, str]]] = {k: [] for k in ALL_HEROES_MASTER}
+
+    for attr, hero_list in ALL_HEROES_MASTER.items():
+        for code, name in hero_list:
+            if code in pool_set:
+                heroes[attr].append((code, name))
+
+    for entry in custom:
+        attr = entry.get("attr", "Universal")
+        code = entry.get("code", "").strip().lower()
+        name = entry.get("name", "").strip()
+        if attr in heroes and code and code not in pool_set:
+            heroes[attr].append((code, name or code))
+
+    return heroes
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Config
+# ──────────────────────────────────────────────────────────────────────────────
+DEFAULT_CONFIG = {
+    "field_point":  [960, 540],
+    "pick_points":  [[1000, 800], [1040, 800], [1020, 820]],
+    "custom_heroes": [],
+    "hero_pool":    list(_DEFAULT_POOL),
+    "presets":      {},
+    "pinned_presets": [],    # Liste von Preset-Namen die fest angezeigt werden (max 3)
+    "startup_preset": "",    # Preset das beim Programmstart automatisch geladen wird
+    "timings": {
+        "field_click_delay":   0.15,
+        "type_duration":       4.0,
+        "enter_pause":         1.0,
+        "pick_duration":       2.0,
+        "pick_click_interval": 0.05,
+        "loop_pause":          0.0,
+        "suchfeld_wait":       2.0,
+    },
+    "pick_hotkey":  ["end"],
+    "dark_mode":    False,
+    "font_large":   False,
+    "game_res":     [1920, 1200],
+    "pick_mode":    "both",         # "image" | "coords" | "both"
+    # Item-Sets für Phase C (6 Sets, je bis zu 6 Items)
+    "item_sets": [
+        {"name": f"Set {i+1}", "items": [
+            {"label": lbl, "file": f"gterminal_{i+1}_{j+1}.png"}
+            for j, lbl in enumerate(["Boots","Iron Branch","Stick","Item 4","Item 5","Item 6"])
+        ]} for i in range(6)
+    ],
+    "active_item_set": 0,
+    "item_phase_enabled": True,
+}
+
+def load_config() -> dict:
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            cfg.setdefault("custom_heroes", [])
+            cfg.setdefault("hero_pool",     list(_DEFAULT_POOL))
+            cfg.setdefault("presets",        {})
+            cfg.setdefault("pinned_presets", [])
+            cfg.setdefault("startup_preset", "")
+            cfg.setdefault("dark_mode",     False)
+            cfg.setdefault("font_large",    False)
+            cfg.setdefault("game_res",      [1920, 1200])
+            cfg.setdefault("pick_mode",          "both")
+            cfg.setdefault("item_sets",          DEFAULT_CONFIG["item_sets"])
+            cfg.setdefault("active_item_set",    0)
+            cfg.setdefault("item_phase_enabled", True)
+            cfg.setdefault("field_point",   DEFAULT_CONFIG["field_point"])
+            cfg.setdefault("timings",       DEFAULT_CONFIG["timings"])
+            cfg.setdefault("pick_hotkey",   DEFAULT_CONFIG["pick_hotkey"])
+            for k, v in DEFAULT_CONFIG["timings"].items():
+                cfg["timings"].setdefault(k, v)
+            return cfg
+        except Exception:
+            pass
+    return DEFAULT_CONFIG.copy()
+
+def save_config(cfg: dict):
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Prozess-Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def kill_processes_by_name(names_lower: set[str]) -> list[str]:
+    killed = []
+    for p in psutil.process_iter(["pid", "name"]):
+        try:
+            name = (p.info["name"] or "").lower()
+            if name in names_lower:
+                p.kill()
+                killed.append(name)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return killed
+
+def _windows_try_start(paths: list[Path], args: list[str] | None = None) -> bool:
+    for p in paths:
+        if p.exists():
+            try:
+                if args:
+                    subprocess.Popen([str(p), *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    os.startfile(str(p))
+                return True
+            except Exception:
+                pass
+    return False
+
+def _which_try_start(exe_names: list[str], args: list[str] | None = None) -> bool:
+    for name in exe_names:
+        found = shutil.which(name)
+        if found:
+            try:
+                if args:
+                    subprocess.Popen([found, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.Popen([found], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except Exception:
+                pass
+    return False
+
+def start_steam() -> bool:
+    if os.name == "nt":
+        pf    = os.environ.get("ProgramFiles",      r"C:\Program Files")
+        pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        if _windows_try_start([Path(pfx86)/"Steam"/"steam.exe", Path(pf)/"Steam"/"steam.exe"]):
+            return True
+        return _which_try_start(["steam.exe", "steam"])
+    return _which_try_start(["steam"])
+
+def start_discord() -> bool:
+    if os.name == "nt":
+        localapp = os.environ.get("LOCALAPPDATA", "")
+        appdata  = os.environ.get("APPDATA", "")
+        cands = []
+        if localapp: cands.append(Path(localapp)/"Discord"/"Update.exe")
+        if appdata:  cands.append(Path(appdata) /"Discord"/"Update.exe")
+        if _windows_try_start(cands, args=["--processStart","Discord.exe"]): return True
+        disc_cands = []
+        if localapp:
+            base = Path(localapp)/"Discord"
+            if base.exists():
+                for child in base.glob("app-*"):
+                    disc_cands.append(child/"Discord.exe")
+        if _windows_try_start(disc_cands): return True
+        return _which_try_start(["Discord.exe","discord"])
+    return _which_try_start(["discord"])
+
+def open_discord_voice_video():
+    url = "discord://-/settings/voice"
+    try:
+        webbrowser.open(url)
+    except Exception:
+        if os.name == "nt":
+            try: os.startfile(url)
+            except Exception: pass
+
+def open_folder(path_str: str) -> bool:
+    try:
+        if os.name == "nt":           os.startfile(path_str)
+        elif sys.platform == "darwin": subprocess.Popen(["open",     path_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:                          subprocess.Popen(["xdg-open", path_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Farb-Paletten
+# ──────────────────────────────────────────────────────────────────────────────
+PAL_DARK = {
+    "bg":"#1a1a2e","surface":"#16213e","surface2":"#0f3460",
+    "accent":"#e94560","text":"#e0e0e0","text_dim":"#8888aa",
+    "str_col":"#e05252","agi_col":"#52c87a","int_col":"#5294e0","uni_col":"#c078e0",
+    "btn_bg":"#252545","separator":"#2a2a4a","success":"#3db870","danger":"#e94560","input_bg":"#1e1e3a",
+}
+PAL_LIGHT = {
+    "bg":"#eef0f5","surface":"#ffffff","surface2":"#d0d4e8",
+    "accent":"#c0143c","text":"#1a1a2e","text_dim":"#5a5a88",
+    "str_col":"#b02020","agi_col":"#1a7a40","int_col":"#1050b0","uni_col":"#7030a0",
+    "btn_bg":"#dde0ee","separator":"#aab0cc","success":"#1a7a40","danger":"#c0143c","input_bg":"#f4f6ff",
+}
+PAL: dict[str, str] = dict(PAL_LIGHT)
+
+ATTR_ORDER  = ["Strength","Agility","Intelligence","Universal"]
+ATTR_COLORS = {"Strength": PAL["str_col"],"Agility": PAL["agi_col"],"Intelligence": PAL["int_col"],"Universal": PAL["uni_col"]}
+ATTR_ICONS  = {"Strength":"STR","Agility":"AGI","Intelligence":"INT","Universal":"UNI"}
+ATTR_DE     = {"Strength":"Stärke","Agility":"Beweglichkeit","Intelligence":"Intelligenz","Universal":"Universal"}
+HERO_COLS   = 5
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Hotkey-Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+_TK_TO_PYNPUT: dict[str, str] = {
+    "Control_L":"ctrl","Control_R":"ctrl","Shift_L":"shift","Shift_R":"shift",
+    "Alt_L":"alt","Alt_R":"alt","End":"end","Home":"home",
+    "Prior":"page_up","Next":"page_down","Return":"enter","BackSpace":"backspace",
+    "Insert":"insert","Delete":"delete",
+    "Up":"up","Down":"down","Left":"left","Right":"right",
+    "Tab":"tab","Escape":"esc",
+    **{f"F{i}":f"f{i}" for i in range(1,13)},
+}
+_KEY_DISPLAY: dict[str, str] = {
+    "ctrl":"Strg","shift":"Shift","alt":"Alt","end":"Ende","home":"Pos1",
+    "page_up":"Bild+","page_down":"Bild-","enter":"Enter","backspace":"Backspace",
+    "delete":"Entf","insert":"Einfg","up":"↑","down":"↓","left":"←","right":"→",
+    "tab":"Tab","esc":"Esc",
+    **{f"f{i}":f"F{i}" for i in range(1,13)},
+}
+
+def _hotkey_display(keys: list[str]) -> str:
+    return " + ".join(_KEY_DISPLAY.get(k, k.upper()) for k in keys)
+
+def _pynput_matches(key, key_str: str) -> bool:
+    if key_str=="ctrl"  and key in (keyboard.Key.ctrl_l,  keyboard.Key.ctrl_r):  return True
+    if key_str=="shift" and key in (keyboard.Key.shift_l, keyboard.Key.shift_r): return True
+    if key_str=="alt"   and key in (keyboard.Key.alt_l,   keyboard.Key.alt_r, keyboard.Key.alt_gr): return True
+    if hasattr(key,"name") and key.name==key_str: return True
+    if hasattr(key,"char") and key.char and key.char.lower()==key_str: return True
+    return False
+
+def _apply_icon(window):
+    try:
+        if ICON_PATH.exists():
+            window.iconbitmap(str(ICON_PATH))
+    except Exception:
+        pass
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Auflösungs-API (Windows)
+# ──────────────────────────────────────────────────────────────────────────────
+class _DEVMODE(ctypes.Structure):
+    _fields_ = [
+        ("dmDeviceName",        ctypes.c_wchar * 32),
+        ("dmSpecVersion",       ctypes.c_ushort),
+        ("dmDriverVersion",     ctypes.c_ushort),
+        ("dmSize",              ctypes.c_ushort),
+        ("dmDriverExtra",       ctypes.c_ushort),
+        ("dmFields",            ctypes.c_ulong),
+        ("dmPositionX",         ctypes.c_long),
+        ("dmPositionY",         ctypes.c_long),
+        ("dmDisplayOrientation",ctypes.c_ulong),
+        ("dmDisplayFixedOutput",ctypes.c_ulong),
+        ("dmColor",             ctypes.c_short),
+        ("dmDuplex",            ctypes.c_short),
+        ("dmYResolution",       ctypes.c_short),
+        ("dmTTOption",          ctypes.c_short),
+        ("dmCollate",           ctypes.c_short),
+        ("dmFormName",          ctypes.c_wchar * 32),
+        ("dmLogPixels",         ctypes.c_ushort),
+        ("dmBitsPerPel",        ctypes.c_ulong),
+        ("dmPelsWidth",         ctypes.c_ulong),
+        ("dmPelsHeight",        ctypes.c_ulong),
+        ("dmDisplayFlags",      ctypes.c_ulong),
+        ("dmDisplayFrequency",  ctypes.c_ulong),
+        ("dmICMMethod",         ctypes.c_ulong),
+        ("dmICMIntent",         ctypes.c_ulong),
+        ("dmMediaType",         ctypes.c_ulong),
+        ("dmDitherType",        ctypes.c_ulong),
+        ("dmReserved1",         ctypes.c_ulong),
+        ("dmReserved2",         ctypes.c_ulong),
+        ("dmPanningWidth",      ctypes.c_ulong),
+        ("dmPanningHeight",     ctypes.c_ulong),
+    ]
+
+def _get_current_resolution() -> tuple[int, int, int]:
+    dm = _DEVMODE()
+    dm.dmSize = ctypes.sizeof(_DEVMODE)
+    ctypes.windll.user32.EnumDisplaySettingsW(None, -1, ctypes.byref(dm))
+    return int(dm.dmPelsWidth), int(dm.dmPelsHeight), int(dm.dmDisplayFrequency)
+
+def _apply_resolution(width: int, height: int, hz: int) -> bool:
+    dm = _DEVMODE()
+    dm.dmSize             = ctypes.sizeof(_DEVMODE)
+    dm.dmPelsWidth        = width
+    dm.dmPelsHeight       = height
+    dm.dmDisplayFrequency = hz
+    dm.dmBitsPerPel       = 32
+    dm.dmFields           = 0x00080000 | 0x00100000 | 0x00400000 | 0x00040000
+    result = ctypes.windll.user32.ChangeDisplaySettingsW(ctypes.byref(dm), 0x01)
+    return result == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GUI
+# ──────────────────────────────────────────────────────────────────────────────
+class GterminalApp:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Gterminal")
+        self.cfg  = load_config()
+
+        # Theme & Schriftgröße
+        self._dark_mode:  bool = self.cfg.get("dark_mode",  False)
+        self._font_large: bool = self.cfg.get("font_large", False)
+        PAL.update(PAL_DARK if self._dark_mode else PAL_LIGHT)
+        self._sync_attr_colors()
+        self.root.configure(bg=PAL["bg"])
+
+        # Schrift-Objekte (tkfont — änderbar ohne UI-Neuaufbau)
+        sz = self._fsize
+        self._fonts = {
+            "ui":       tkfont.Font(root, family="Segoe UI",  size=sz(7)),
+            "ui_bold":  tkfont.Font(root, family="Segoe UI",  size=sz(7), weight="bold"),
+            "mono":     tkfont.Font(root, family="Consolas",  size=sz(7)),
+            "title":    tkfont.Font(root, family="Segoe UI",  size=sz(9), weight="bold"),
+            "section":  tkfont.Font(root, family="Segoe UI",  size=sz(7), weight="bold"),
+            "small":    tkfont.Font(root, family="Segoe UI",  size=sz(6)),
+            "hero":     tkfont.Font(root, family="Consolas",  size=sz(7)),
+            "status":   tkfont.Font(root, family="Consolas",  size=sz(6)),
+            "big_bold": tkfont.Font(root, family="Segoe UI",  size=sz(8), weight="bold"),
+        }
+
+        # State
+        self.stop_enter = threading.Event()
+        self.stop_four  = threading.Event()
+        self.stop_pick  = threading.Event()
+        self.enter_thread = None
+        self.four_thread  = None
+        self.pick_thread  = None
+        self.selected_heroes: list[str] = []
+        self.hero_buttons:    dict[str, tk.Button] = {}
+        self.pressed_keys     = set()
+        self.kill_combo_armed = False
+        self.pick_hotkey_armed= False
+        self.calibrating  = False
+        self.calib_points: list[tuple[int,int]] = []
+        self.calib_lock   = threading.Lock()
+        self.status_var   = tk.StringVar(value=f"Pos1=ENTER  |  Ende=Pick  |  Strg+Einfg=Taste4  |  BACKSPACE=Stop  |  Config: {CONFIG_PATH}")
+
+        # Root grid — kein Header mehr, main = row 0
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+
+        # ── Header (leer)
+        self._build_header()
+
+        # ── Main content
+        main = tk.Frame(root, bg=PAL["bg"], padx=7, pady=6)
+        main.grid(row=0, column=0, sticky="nsew")
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(3, weight=1)
+
+        auto = self._section(main, "AUTO KEYS", row=0)
+        auto.columnconfigure((0,1,2), weight=1)
+        self._btn(auto,"ENTER /5s",  self.start_enter     ).grid(row=0,column=0,sticky="ew",padx=(0,3))
+        self._btn(auto,"Taste 4 /5s",self.start_four      ).grid(row=0,column=1,sticky="ew",padx=3)
+        self._btn(auto,"STOP",       self.stop_all_macros,accent=True).grid(row=0,column=2,sticky="ew",padx=(3,0))
+
+        apps = self._section(main, "APPS", row=1)
+        apps.columnconfigure((0,1,2), weight=1)
+        self._btn(apps,"Steam X",   self.kill_steam  ).grid(row=0,column=0,sticky="ew",padx=(0,3))
+        self._btn(apps,"Discord X", self.kill_discord).grid(row=0,column=1,sticky="ew",padx=3)
+        self._btn(apps,"Games X",   self.kill_games, accent=True).grid(row=0,column=2,sticky="ew",padx=(3,0))
+        self._btn(apps,"Steam",     self.ui_start_steam  ).grid(row=1,column=0,sticky="ew",padx=(0,3),pady=(3,0))
+        self._btn(apps,"Discord",   self.ui_start_discord).grid(row=1,column=1,sticky="ew",padx=3,   pady=(3,0))
+        tk.Label(apps,text="Bild+ / Bild-",bg=PAL["surface"],fg=PAL["text_dim"],font=self._fonts["small"]).grid(row=1,column=2,sticky="ew",padx=(3,0),pady=(3,0))
+
+        sett = self._section(main, "SETTINGS", row=2)
+        sett.columnconfigure((0,1), weight=1)
+        self._btn(sett,"Voice & Video",self.ui_open_discord_voice_video).grid(row=0,column=0,sticky="ew",padx=(0,3))
+        self._btn(sett,"D2 Settings",  self.ui_open_d2_settings_folder ).grid(row=0,column=1,sticky="ew",padx=(3,0))
+
+        pick_outer = self._section(main, "HERO PICK MACRO", row=3)
+        pick_outer.columnconfigure(0, weight=1)
+        pick_outer.rowconfigure(1, weight=1)
+        # Make the pick_outer wrapper (parent of pick_outer) expand
+        pick_outer.master.rowconfigure(1, weight=1)
+
+        # ── Notebook (Registerkarten) ────────────────────────────────
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("GT.TNotebook",
+                        background=PAL["bg"], borderwidth=0)
+        style.configure("GT.TNotebook.Tab",
+                        background=PAL["btn_bg"], foreground=PAL["text_dim"],
+                        padding=[10, 4], font=("Segoe UI", 8, "bold"),
+                        borderwidth=0)
+        style.map("GT.TNotebook.Tab",
+                  background=[("selected", PAL["surface2"])],
+                  foreground=[("selected", PAL["accent"])])
+
+        nb = ttk.Notebook(pick_outer, style="GT.TNotebook")
+        nb.grid(row=0, column=0, sticky="nsew", pady=(0, 0))
+        pick_outer.rowconfigure(0, weight=1)
+
+        # ── TAB 1 : Pick ──────────────────────────────────────────────
+        tab_pick = tk.Frame(nb, bg=PAL["surface"])
+        tab_pick.columnconfigure(0, weight=1)
+        tab_pick.rowconfigure(5, weight=1)
+        nb.add(tab_pick, text="🎮  Pick")
+
+        # Zeile 0: Hotkey-Info + Modus kompakt in einer Zeile
+        top_row = tk.Frame(tab_pick, bg=PAL["surface"])
+        top_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
+        top_row.columnconfigure(1, weight=1)
+
+        self.hotkey_label = tk.Label(top_row,
+            text=_hotkey_display(self.cfg.get("pick_hotkey", ["end"])),
+            bg=PAL["surface"], fg=PAL["accent"],
+            font=self._fonts["mono"], anchor="w")
+        self.hotkey_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        # Modus-Umschalter kompakt rechts
+        self._mode_var = tk.StringVar(value=self.cfg.get("pick_mode", "both"))
+
+        mode_inner = tk.Frame(top_row, bg=PAL["surface"])
+        mode_inner.grid(row=0, column=1, sticky="e")
+
+        def _mode_btn(parent, label, val):
+            def _cmd():
+                self._mode_var.set(val)
+                self.cfg["pick_mode"] = val
+                save_config(self.cfg)
+                _refresh_mode_buttons()
+            b = tk.Button(parent, text=label, command=_cmd,
+                          relief="flat", bd=0, cursor="hand2",
+                          font=self._fonts["small"], padx=5, pady=2,
+                          highlightthickness=1,
+                          highlightbackground=PAL["separator"])
+            b.pack(side="left", padx=(0, 2))
+            return b
+
+        self._mode_btns = {
+            "image":  _mode_btn(mode_inner, "📷",  "image"),
+            "coords": _mode_btn(mode_inner, "📍",  "coords"),
+            "both":   _mode_btn(mode_inner, "🔀",  "both"),
+        }
+
+        def _refresh_mode_buttons():
+            cur = self._mode_var.get()
+            for key, btn in self._mode_btns.items():
+                if key == cur:
+                    btn.config(bg=PAL["accent"], fg=PAL["bg"],
+                               highlightbackground=PAL["accent"])
+                else:
+                    btn.config(bg=PAL["btn_bg"], fg=PAL["text"],
+                               highlightbackground=PAL["separator"])
+
+        _refresh_mode_buttons()
+        self._refresh_mode_buttons = _refresh_mode_buttons
+
+        # Zeile 1: Auswahl-Label
+        self.selected_label = tk.Label(tab_pick,
+            text="Auswahl (max 8):  -",
+            bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["mono"], anchor="w")
+        self.selected_label.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 2))
+
+        # Item-Set-Zeile (über Preset)
+        item_row = tk.Frame(tab_pick, bg=PAL["surface"])
+        item_row.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 3))
+        item_row.columnconfigure((1,2,3,4,5,6), weight=1)
+
+        # Zeile 0: Label + AN/AUS Toggle
+        tk.Label(item_row, text="🛒 Items:",
+                 bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="w"
+                 ).grid(row=0, column=0, sticky="w", padx=(0, 4))
+
+        self._item_phase_var = tk.BooleanVar(value=self.cfg.get("item_phase_enabled", True))
+
+        def _toggle_item_phase():
+            # Zustand umkehren
+            new_val = not self.cfg.get("item_phase_enabled", True)
+            self.cfg["item_phase_enabled"] = new_val
+            self._item_phase_var.set(new_val)
+            save_config(self.cfg)
+            _update_onoff_btn()
+
+        self._onoff_btn = tk.Button(item_row, text="",
+                  command=_toggle_item_phase,
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["small"], padx=8, pady=3,
+                  highlightthickness=1, highlightbackground=PAL["separator"])
+        self._onoff_btn.grid(row=0, column=1, sticky="ew", padx=(0, 4))
+
+        def _update_onoff_btn():
+            on = self.cfg.get("item_phase_enabled", True)
+            self._item_phase_var.set(on)
+            self._onoff_btn.config(
+                text="✔ Phase C AN" if on else "✗ Phase C AUS",
+                bg=PAL["success"] if on else PAL["btn_bg"],
+                fg=PAL["bg"]      if on else PAL["text_dim"],
+            )
+        _update_onoff_btn()
+        self._update_onoff_btn = _update_onoff_btn
+
+        tk.Button(item_row, text="⚙",
+                  command=self.open_item_set_editor,
+                  bg=PAL["surface2"], fg=PAL["accent"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["title"], padx=4, pady=1,
+                  highlightthickness=0
+                  ).grid(row=0, column=7, sticky="e", padx=(4, 0))
+
+        # Zeilen 1+2: 6 Set-Buttons (3 pro Zeile)
+        self._item_set_var  = tk.IntVar(value=self.cfg.get("active_item_set", 0))
+        self._item_set_btns: list[tk.Button] = []
+
+        def _set_active_item_set(idx: int):
+            self.cfg["active_item_set"] = idx
+            save_config(self.cfg)
+            self._item_set_var.set(idx)
+            _refresh_item_set_btns()
+
+        def _refresh_item_set_btns():
+            active = self.cfg.get("active_item_set", 0)
+            sets   = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
+            for i, btn in enumerate(self._item_set_btns):
+                name = sets[i]["name"] if i < len(sets) else f"Set {i+1}"
+                btn.config(
+                    text=name,
+                    bg=PAL["accent"] if i == active else PAL["btn_bg"],
+                    fg=PAL["bg"]     if i == active else PAL["text"],
+                )
+        self._refresh_item_set_btns = _refresh_item_set_btns
+
+        for idx in range(6):
+            sets = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
+            name = sets[idx]["name"] if idx < len(sets) else f"Set {idx+1}"
+            r    = 1 + idx // 3
+            c    = idx % 3
+            btn  = tk.Button(item_row, text=name,
+                             command=lambda i=idx: _set_active_item_set(i),
+                             bg=PAL["accent"] if idx == self.cfg.get("active_item_set",0) else PAL["btn_bg"],
+                             fg=PAL["bg"]     if idx == self.cfg.get("active_item_set",0) else PAL["text"],
+                             relief="flat", bd=0, cursor="hand2",
+                             font=self._fonts["small"],
+                             padx=2, pady=3, width=8,
+                             anchor="center",
+                             highlightthickness=1, highlightbackground=PAL["separator"])
+            btn.grid(row=r, column=1+c, sticky="ew", padx=(0, 2), pady=(1, 0))
+            item_row.columnconfigure(1+c, weight=1, uniform="itemset")
+            self._item_set_btns.append(btn)
+
+        # Preset — erste 3 immer sichtbar + einklappbar für Rest
+        preset_outer = tk.Frame(tab_pick, bg=PAL["surface"])
+        preset_outer.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 4))
+        preset_outer.columnconfigure(0, weight=1)
+
+        # Zeile 0: Toggle + ＋ Button
+        preset_header = tk.Frame(preset_outer, bg=PAL["surface"])
+        preset_header.grid(row=0, column=0, sticky="ew")
+        preset_header.columnconfigure(1, weight=1)
+
+        self._preset_open = tk.BooleanVar(value=False)
+
+        def _toggle_preset():
+            if self._preset_open.get():
+                preset_extra.grid_remove()
+                self._preset_open.set(False)
+                toggle_btn.config(text="▶ mehr")
+            else:
+                preset_extra.grid()
+                self._preset_open.set(True)
+                toggle_btn.config(text="▼ mehr")
+            # Fensterhöhe an neuen Inhalt anpassen, Breite bleibt fix
+            self.root.update_idletasks()
+            self.root.geometry(f"470x{self.root.winfo_reqheight()}")
+
+        toggle_btn = tk.Button(preset_header, text="▶ mehr",
+                               command=_toggle_preset,
+                               bg=PAL["surface"], fg=PAL["text_dim"],
+                               activebackground=PAL["surface"], activeforeground=PAL["accent"],
+                               relief="flat", bd=0, cursor="hand2",
+                               font=self._fonts["small"], padx=0, pady=2,
+                               highlightthickness=0)
+        toggle_btn.grid(row=0, column=0, sticky="w")
+
+        self._btn(preset_header, "＋", self.save_preset_dialog
+                  ).grid(row=0, column=1, sticky="e", padx=(0, 2))
+
+        # ✏ Stift — schaltet Änderungsmodus (Sterne sichtbar) ein/aus
+        self._preset_edit_mode = False
+
+        def _toggle_edit_mode():
+            self._preset_edit_mode = not self._preset_edit_mode
+            edit_btn.config(
+                bg=PAL["accent"] if self._preset_edit_mode else PAL["surface"],
+                fg=PAL["bg"]     if self._preset_edit_mode else PAL["text_dim"],
+            )
+            self._rebuild_preset_buttons()
+            self.root.update_idletasks()
+            self.root.geometry(f"470x{self.root.winfo_reqheight()}")
+
+        edit_btn = tk.Button(preset_header, text="✏",
+                             command=_toggle_edit_mode,
+                             bg=PAL["surface"], fg=PAL["text_dim"],
+                             activebackground=PAL["accent"], activeforeground=PAL["bg"],
+                             relief="flat", bd=0, cursor="hand2",
+                             font=self._fonts["small"], padx=4, pady=2,
+                             highlightthickness=1, highlightbackground=PAL["separator"])
+        edit_btn.grid(row=0, column=2, sticky="e")
+        self._preset_edit_btn = edit_btn
+
+        # Zeile 1: Immer 3 feste Preset-Buttons
+        self.preset_btn_frame = tk.Frame(preset_outer, bg=PAL["surface"])
+        self.preset_btn_frame.grid(row=1, column=0, sticky="ew")
+        self.preset_btn_frame.columnconfigure((0, 1, 2), weight=1, uniform="preset")
+
+        # Zeile 2: Extra Presets (aufklappbar)
+        preset_extra = tk.Frame(preset_outer, bg=PAL["surface"])
+        preset_extra.grid(row=2, column=0, sticky="ew")
+        preset_extra.columnconfigure((0, 1, 2), weight=1, uniform="preset")
+        preset_extra.grid_remove()
+        self._preset_extra_frame = preset_extra
+
+        self._rebuild_preset_buttons()
+
+        # Hero-Grid
+        self.hero_frame = tk.Frame(tab_pick, bg=PAL["surface"])
+        self.hero_frame.grid(row=4, column=0, sticky="nsew", padx=4)
+        tab_pick.rowconfigure(4, weight=1)
+        for c in range(HERO_COLS):
+            self.hero_frame.columnconfigure(c, weight=1)
+        self._rebuild_hero_grid()
+
+        # ── TAB 2 : Konfiguration ─────────────────────────────────────
+        tab_cfg = tk.Frame(nb, bg=PAL["surface"])
+        tab_cfg.columnconfigure(0, weight=1)
+        nb.add(tab_cfg, text="⚙  Konfiguration")
+
+        cfg_row = 0
+
+        # ── Pick-Konfiguration ────────────────────────────────────────
+        cfg_pick_items = [
+            ("📍 Koordinaten kalibrieren (F8)", self.start_calibration),
+            ("📷 Bild-Templates erfassen",       self.open_image_calib_dialog),
+            ("🔍 Erkennung testen",              self.test_image_recognition),
+            ("🛒 Item-Sets verwalten",           self.open_item_set_editor),
+            ("⏱ Zeiten & Hotkey",               self.open_timing_config),
+            ("🎯 Held-Pool verwalten",            self.open_hero_pool_manager),
+            ("➕ Eigenen Held hinzufügen",        self.open_hero_manager),
+        ]
+        for label, cmd in cfg_pick_items:
+            self._btn(tab_cfg, label, cmd).grid(
+                row=cfg_row, column=0, sticky="ew", padx=6, pady=2)
+            cfg_row += 1
+
+        # ── Trennlinie ────────────────────────────────────────────────
+        tk.Frame(tab_cfg, bg=PAL["separator"], height=1
+                 ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(6, 4))
+        cfg_row += 1
+
+        # ── Auflösung ─────────────────────────────────────────────────
+        res_hdr = tk.Frame(tab_cfg, bg=PAL["surface"])
+        res_hdr.grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(0, 3))
+        res_hdr.columnconfigure(1, weight=1)
+        tk.Label(res_hdr, text="🖥  Auflösung:",
+                 bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="w"
+                 ).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self._res_status = tk.Label(res_hdr, text=self._res_current_str(),
+                 bg=PAL["surface"], fg=PAL["success"],
+                 font=self._fonts["mono"], anchor="w")
+        self._res_status.grid(row=0, column=1, sticky="w")
+        cfg_row += 1
+
+        res_btn_row = tk.Frame(tab_cfg, bg=PAL["surface"])
+        res_btn_row.grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(0, 4))
+        res_btn_row.columnconfigure((0, 1), weight=1)
+        self._btn(res_btn_row, "2560×1600  165Hz", lambda: self._set_res(2560,1600,165)
+                  ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        self._btn(res_btn_row, "1920×1200  165Hz", lambda: self._set_res(1920,1200,165)
+                  ).grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        cfg_row += 1
+
+        # ── Trennlinie ────────────────────────────────────────────────
+        tk.Frame(tab_cfg, bg=PAL["separator"], height=1
+                 ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(2, 6))
+        cfg_row += 1
+
+        # ── Theme & Zoom ──────────────────────────────────────────────
+        tz_row = tk.Frame(tab_cfg, bg=PAL["surface"])
+        tz_row.grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(0, 4))
+        tz_row.columnconfigure((0, 1), weight=1)
+
+        self.theme_btn = tk.Button(tz_row,
+            text="☀️ Dark Mode" if not self._dark_mode else "🌙 Light Mode",
+            command=self.toggle_theme,
+            bg=PAL["btn_bg"], fg=PAL["text"],
+            activebackground=PAL["accent"], activeforeground=PAL["bg"],
+            relief="flat", bd=0, cursor="hand2",
+            font=self._fonts["ui"], padx=4, pady=4,
+            highlightthickness=1, highlightbackground=PAL["separator"])
+        self.theme_btn.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+
+        self.font_btn = tk.Button(tz_row,
+            text="🔡 Normal" if not self._font_large else "🔠 Groß",
+            command=self.toggle_font_scale,
+            bg=PAL["btn_bg"], fg=PAL["text"],
+            activebackground=PAL["accent"], activeforeground=PAL["bg"],
+            relief="flat", bd=0, cursor="hand2",
+            font=self._fonts["ui"], padx=4, pady=4,
+            highlightthickness=1, highlightbackground=PAL["separator"])
+        self.font_btn.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        cfg_row += 1
+
+        # ── Trennlinie ────────────────────────────────────────────────
+        tk.Frame(tab_cfg, bg=PAL["separator"], height=1
+                 ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(2, 6))
+        cfg_row += 1
+
+        # ── Stratz-Links ──────────────────────────────────────────────
+        tk.Label(tab_cfg, text="📊  Stratz",
+                 bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="w"
+                 ).grid(row=cfg_row, column=0, sticky="w", padx=6, pady=(0, 3))
+        cfg_row += 1
+
+        for name, url in [
+            ("Stratz Robert",  "https://stratz.com/players/44216623"),
+            ("Stratz Jan",     "https://stratz.com/players/20846181"),
+            ("Stratz Ben",     "https://stratz.com/players/314442285"),
+        ]:
+            self._btn(tab_cfg, f"🔗  {name}", lambda u=url: webbrowser.open(u)
+                      ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=2)
+            cfg_row += 1
+
+        # ── Status-Info ───────────────────────────────────────────────
+        tk.Frame(tab_cfg, bg=PAL["separator"], height=1
+                 ).grid(row=cfg_row, column=0, sticky="ew", padx=6, pady=(6, 4))
+        cfg_row += 1
+
+        self._cfg_mode_label = tk.Label(tab_cfg,
+            text="",
+            bg=PAL["surface"], fg=PAL["text_dim"],
+            font=self._fonts["small"], anchor="w", justify="left", wraplength=360)
+        self._cfg_mode_label.grid(row=cfg_row, column=0, sticky="ew", padx=6)
+
+        def _update_cfg_mode_label(*_):
+            field_ok = FIELD_TEMPLATE_PATH.exists()
+            auswahl_ok= AUSWAHL_TEMPLATE_PATH.exists()
+            coord_ok = (isinstance(self.cfg.get("pick_points"), list) and
+                        len(self.cfg.get("pick_points", [])) == 3)
+            lines = [
+                f"Suchfeld-Template:   {'✔' if field_ok   else '✗ fehlt'}",
+                f"Auswählen-Template:  {'✔' if auswahl_ok else '✗ fehlt'}",
+                f"Koordinaten:         {'✔' if coord_ok   else '✗ nicht kalibriert'}",
+            ]
+            self._cfg_mode_label.config(text="\n".join(lines))
+
+        _update_cfg_mode_label()
+        nb.bind("<<NotebookTabChanged>>", _update_cfg_mode_label)
+
+        # Status-Leiste + globaler Speichern-Button
+        status_bar = tk.Frame(root, bg=PAL["surface2"], height=22)
+        status_bar.grid(row=1, column=0, sticky="ew")
+        status_bar.columnconfigure(0, weight=1)
+        tk.Label(status_bar, textvariable=self.status_var,
+                 bg=PAL["surface2"], fg=PAL["text_dim"],
+                 font=self._fonts["status"], anchor="w", padx=6, pady=2
+                 ).grid(row=0, column=0, sticky="ew")
+        tk.Button(status_bar, text="💾 Speichern",
+                  command=self.save_all_settings,
+                  bg=PAL["surface2"], fg=PAL["success"],
+                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["small"], padx=8, pady=2,
+                  highlightthickness=0
+                  ).grid(row=0, column=1, sticky="e", padx=(0, 4))
+
+        # Hotkey-Listener
+        self.kb_listener = keyboard.Listener(
+            on_press=self._on_global_key_press,
+            on_release=self._on_global_key_release)
+        self.kb_listener.daemon = True
+        self.kb_listener.start()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # Startup-Preset beim Start automatisch laden
+        sp = self.cfg.get("startup_preset", "")
+        if sp and sp in self.cfg.get("presets", {}):
+            self.root.after(200, lambda: self.load_preset(sp))
+
+        # Auto-Close Timer
+        self._last_game_seen = time.time()
+        self._auto_close_check()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Font-Helpers
+    # ──────────────────────────────────────────────────────────────────
+    def _fsize(self, base: int) -> int:
+        return round(base * (1.35 if self._font_large else 1.0))
+
+    def _update_fonts(self):
+        sz = self._fsize
+        self._fonts["ui"]      .configure(size=sz(7))
+        self._fonts["ui_bold"] .configure(size=sz(7))
+        self._fonts["mono"]    .configure(size=sz(7))
+        self._fonts["title"]   .configure(size=sz(9))
+        self._fonts["section"] .configure(size=sz(7))
+        self._fonts["small"]   .configure(size=sz(6))
+        self._fonts["hero"]    .configure(size=sz(7))
+        self._fonts["status"]  .configure(size=sz(6))
+        self._fonts["big_bold"].configure(size=sz(8))
+
+    # ──────────────────────────────────────────────────────────────────
+    # Header (minimal — nur root rowconfigure placeholder)
+    # ──────────────────────────────────────────────────────────────────
+    def _build_header(self):
+        # Kein Header mehr — theme/font in Konfiguration Tab
+        # Dummy-Frame damit rowconfigure(1) weiter klappt
+        self.font_btn  = None
+        self.theme_btn = None
+
+    # ──────────────────────────────────────────────────────────────────
+    # Theme & Font Toggle
+    # ──────────────────────────────────────────────────────────────────
+    def _sync_attr_colors(self):
+        ATTR_COLORS["Strength"]     = PAL["str_col"]
+        ATTR_COLORS["Agility"]      = PAL["agi_col"]
+        ATTR_COLORS["Intelligence"] = PAL["int_col"]
+        ATTR_COLORS["Universal"]    = PAL["uni_col"]
+
+    def toggle_theme(self):
+        old_pal = dict(PAL)
+        self._dark_mode = not self._dark_mode
+        PAL.update(PAL_DARK if self._dark_mode else PAL_LIGHT)
+        self._sync_attr_colors()
+        color_map = {old_pal[k]: PAL[k] for k in PAL}
+        self._retheme_widgets(self.root, color_map)
+        if self.theme_btn:
+            self.theme_btn.config(
+                text="☀️ Dark Mode" if not self._dark_mode else "🌙 Light Mode",
+                bg=PAL["btn_bg"], fg=PAL["text"],
+                activebackground=PAL["accent"])
+        if self.font_btn:
+            self.font_btn.config(bg=PAL["btn_bg"], fg=PAL["text"],
+                                  activebackground=PAL["accent"])
+        self._rebuild_hero_grid()
+        self._rebuild_preset_buttons()
+        if hasattr(self, "_refresh_mode_buttons"):
+            self._refresh_mode_buttons()
+        self.cfg["dark_mode"] = self._dark_mode
+        save_config(self.cfg)
+
+    def _retheme_widgets(self, widget, color_map: dict[str,str]):
+        for attr in ("bg","fg","highlightbackground","highlightcolor",
+                     "activebackground","activeforeground","selectcolor","insertbackground"):
+            try:
+                cur = widget.cget(attr)
+                if cur and cur.startswith("#") and cur.lower() in color_map:
+                    widget.config(**{attr: color_map[cur.lower()]})
+            except Exception:
+                pass
+        for child in widget.winfo_children():
+            self._retheme_widgets(child, color_map)
+
+    def toggle_font_scale(self):
+        self._font_large = not self._font_large
+        self._update_fonts()
+        if self.font_btn:
+            self.font_btn.config(text="🔠 Groß" if self._font_large else "🔡 Normal")
+        self._rebuild_hero_grid()
+        self._rebuild_preset_buttons()
+        self.cfg["font_large"] = self._font_large
+        save_config(self.cfg)
+        self.status_var.set(f"Schrift: {'Groß' if self._font_large else 'Normal'}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Style helpers
+    # ──────────────────────────────────────────────────────────────────
+    def _section(self, parent, title: str, row: int) -> tk.Frame:
+        wrapper = tk.Frame(parent, bg=PAL["bg"])
+        wrapper.grid(row=row, column=0, sticky="ew", pady=(0,5))
+        wrapper.columnconfigure(0, weight=1)
+        title_bar = tk.Frame(wrapper, bg=PAL["surface2"])
+        title_bar.grid(row=0, column=0, sticky="ew")
+        title_bar.columnconfigure(0, weight=1)
+        tk.Label(title_bar, text=f"  {title}",
+                 bg=PAL["surface2"], fg=PAL["accent"],
+                 font=self._fonts["section"], anchor="w", padx=4, pady=2
+                 ).grid(row=0, column=0, sticky="ew")
+        content = tk.Frame(wrapper, bg=PAL["surface"], padx=5, pady=5)
+        content.grid(row=1, column=0, sticky="nsew")
+        content.columnconfigure(0, weight=1)
+        # NOTE: wrapper.rowconfigure intentionally NOT set here —
+        # only the pick_outer section gets weight=1 explicitly
+        return content
+
+    def _btn(self, parent, text: str, command, accent: bool = False) -> tk.Button:
+        bg = PAL["accent"] if accent else PAL["btn_bg"]
+        fg = PAL["bg"]     if accent else PAL["text"]
+        return tk.Button(parent, text=text, command=command,
+                         bg=bg, fg=fg,
+                         activebackground=PAL["accent"], activeforeground=PAL["bg"],
+                         relief="flat", bd=0, cursor="hand2",
+                         font=self._fonts["ui_bold" if accent else "ui"],
+                         padx=4, pady=4, highlightthickness=1,
+                         highlightbackground=PAL["separator"],
+                         highlightcolor=PAL["accent"])
+
+    # ──────────────────────────────────────────────────────────────────
+    # Hero Grid
+    # ──────────────────────────────────────────────────────────────────
+    def _rebuild_hero_grid(self):
+        for w in self.hero_frame.winfo_children():
+            w.destroy()
+        self.hero_buttons.clear()
+
+        heroes      = _build_heroes(self.cfg.get("hero_pool",[]), self.cfg.get("custom_heroes",[]))
+        current_row = 0
+
+        for attr_idx, attr in enumerate(ATTR_ORDER):
+            attr_heroes = heroes.get(attr, [])
+            if not attr_heroes:
+                continue
+            color   = ATTR_COLORS[attr]
+            top_pad = 5 if attr_idx > 0 else 0
+
+            hdr = tk.Frame(self.hero_frame, bg=PAL["surface2"])
+            hdr.grid(row=current_row, column=0, columnspan=HERO_COLS, sticky="ew", pady=(top_pad,1))
+            hdr.columnconfigure(0, weight=1)
+            tk.Label(hdr, text=f"  {ATTR_ICONS[attr]}  {attr.upper()}",
+                     bg=PAL["surface2"], fg=color,
+                     font=self._fonts["section"], anchor="w", padx=4, pady=1
+                     ).grid(row=0, column=0, sticky="ew")
+            current_row += 1
+
+            for i, (code, _lbl) in enumerate(attr_heroes):
+                r = i // HERO_COLS
+                c = i % HERO_COLS
+                is_sel = code in self.selected_heroes
+                btn = tk.Button(self.hero_frame, text=code,
+                                command=lambda k=code: self.toggle_hero(k),
+                                bg=PAL["accent"] if is_sel else PAL["btn_bg"],
+                                fg=PAL["bg"]     if is_sel else PAL["text"],
+                                activebackground=color, activeforeground=PAL["bg"],
+                                relief="flat", bd=0, cursor="hand2",
+                                font=self._fonts["hero"], padx=2, pady=3,
+                                highlightthickness=1,
+                                highlightbackground=PAL["accent"] if is_sel else PAL["separator"],
+                                highlightcolor=color)
+                btn.grid(row=current_row+r, column=c, sticky="ew", padx=1, pady=1)
+                self.hero_buttons[code] = btn
+
+            current_row += (len(attr_heroes) + HERO_COLS - 1) // HERO_COLS
+
+        for code in list(self.selected_heroes):
+            if code not in self.hero_buttons:
+                self.selected_heroes.remove(code)
+        self._update_selected_label()
+
+    def toggle_hero(self, hero_code: str):
+        if hero_code in self.selected_heroes:
+            self.selected_heroes.remove(hero_code)
+            self._set_button_selected(hero_code, False)
+        else:
+            if len(self.selected_heroes) >= 8:
+                self.status_var.set("Max 8 Helden auswahlbar.")
+                return
+            self.selected_heroes.append(hero_code)
+            self._set_button_selected(hero_code, True)
+        self._update_selected_label()
+
+    def _set_button_selected(self, hero_code: str, selected: bool):
+        btn = self.hero_buttons.get(hero_code)
+        if not btn: return
+        if selected:
+            btn.configure(bg=PAL["accent"], fg=PAL["bg"], highlightbackground=PAL["accent"])
+        else:
+            btn.configure(bg=PAL["btn_bg"], fg=PAL["text"], highlightbackground=PAL["separator"])
+
+    def _update_selected_label(self):
+        if not self.selected_heroes:
+            self.selected_label.config(text="Auswahl (max 8):  -")
+        else:
+            self.selected_label.config(text="Auswahl (max 8):  " + "  /  ".join(self.selected_heroes))
+
+    # ──────────────────────────────────────────────────────────────────
+    # 🎯 Hero-Pool-Manager  (komplette Held-Übersicht)
+    # ──────────────────────────────────────────────────────────────────
+    def open_hero_pool_manager(self):
+        win = tk.Toplevel(self.root)
+        win.title("Held-Pool verwalten")
+        win.configure(bg=PAL["bg"])
+        win.grab_set()
+        win.focus_force()
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(0, weight=1)
+        _apply_icon(win)
+
+        current_pool = set(self.cfg.get("hero_pool", []))
+        selected_set = set(self.selected_heroes)
+
+        # ── Scrollbereich
+        outer = tk.Frame(win, bg=PAL["bg"])
+        outer.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(outer, bg=PAL["bg"], highlightthickness=0)
+        scrollbar = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        inner = tk.Frame(canvas, bg=PAL["bg"])
+        canvas_window = canvas.create_window((0,0), window=inner, anchor="nw")
+        inner.columnconfigure(0, weight=1)
+
+        def _on_resize(evt):
+            canvas.itemconfig(canvas_window, width=evt.width)
+        canvas.bind("<Configure>", _on_resize)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        # Mausrad-Scroll
+        def _on_mousewheel(evt):
+            canvas.yview_scroll(int(-1*(evt.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # checkboxes: code → BooleanVar
+        check_vars: dict[str, tk.BooleanVar] = {}
+
+        for attr_idx, attr in enumerate(ATTR_ORDER):
+            all_in_attr = ALL_HEROES_MASTER.get(attr, [])
+            custom_in_attr = [(e["code"], e.get("name","")) for e in self.cfg.get("custom_heroes",[]) if e.get("attr")==attr]
+            all_heroes_here = all_in_attr + custom_in_attr
+            if not all_heroes_here:
+                continue
+
+            color   = ATTR_COLORS[attr]
+            top_pad = 8 if attr_idx > 0 else 0
+
+            # Attribut-Header mit Alle/Keine-Buttons
+            hdr = tk.Frame(inner, bg=PAL["surface2"])
+            hdr.grid(row=attr_idx*2, column=0, sticky="ew", pady=(top_pad,2))
+            hdr.columnconfigure(0, weight=1)
+            tk.Label(hdr, text=f"  {ATTR_ICONS[attr]}  {attr.upper()}  ({ATTR_DE[attr]})",
+                     bg=PAL["surface2"], fg=color, font=self._fonts["section"], anchor="w", padx=4, pady=3
+                     ).grid(row=0, column=0, sticky="w")
+
+            def make_select_all(code_list, val):
+                def _cmd():
+                    for c in code_list:
+                        if c in check_vars:
+                            check_vars[c].set(val)
+                return _cmd
+
+            codes_in_attr = [c for c, _ in all_heroes_here]
+            btn_all  = tk.Button(hdr, text="Alle",  command=make_select_all(codes_in_attr, True),
+                                 bg=PAL["surface2"], fg=PAL["success"], relief="flat", bd=0,
+                                 font=self._fonts["small"], padx=6, pady=2, cursor="hand2")
+            btn_all.grid(row=0, column=1, padx=4)
+            btn_none = tk.Button(hdr, text="Keine", command=make_select_all(codes_in_attr, False),
+                                 bg=PAL["surface2"], fg=PAL["danger"], relief="flat", bd=0,
+                                 font=self._fonts["small"], padx=6, pady=2, cursor="hand2")
+            btn_none.grid(row=0, column=2, padx=(0,4))
+
+            # Hero-Checkboxes in Raster
+            grid_frame = tk.Frame(inner, bg=PAL["surface"])
+            grid_frame.grid(row=attr_idx*2+1, column=0, sticky="ew", padx=0, pady=0)
+            COLS = 6
+            for c in range(COLS):
+                grid_frame.columnconfigure(c, weight=1)
+
+            for i, (code, name) in enumerate(all_heroes_here):
+                r = i // COLS
+                c = i % COLS
+                var = tk.BooleanVar(value=code in current_pool)
+                check_vars[code] = var
+
+                # Farbe basierend auf Status
+                in_sel   = code in selected_set
+                in_pool  = code in current_pool
+
+                cell_bg = PAL["surface"]
+                lbl_color = PAL["accent"] if in_sel else color if in_pool else PAL["text_dim"]
+
+                cell = tk.Frame(grid_frame, bg=cell_bg)
+                cell.grid(row=r, column=c, sticky="ew", padx=1, pady=1)
+                cell.columnconfigure(0, weight=1)
+
+                cb = tk.Checkbutton(cell, text=code, variable=var,
+                                    bg=cell_bg, fg=lbl_color,
+                                    selectcolor=PAL["input_bg"],
+                                    activebackground=cell_bg, activeforeground=color,
+                                    font=self._fonts["mono"], anchor="w",
+                                    relief="flat", bd=0, cursor="hand2",
+                                    highlightthickness=0)
+                cb.grid(row=0, column=0, sticky="ew", padx=2)
+
+                # Tooltip: voller Name
+                if name:
+                    tip_lbl = tk.Label(cell, text=name, bg=cell_bg, fg=PAL["text_dim"],
+                                       font=self._fonts["small"], anchor="w")
+                    tip_lbl.grid(row=1, column=0, sticky="ew", padx=2, pady=(0,1))
+
+                # Markierung: in Auswahl = Akzentfarbe border
+                if in_sel:
+                    cell.config(highlightbackground=PAL["accent"], highlightthickness=1)
+
+        # ── Legende
+        legend = tk.Frame(win, bg=PAL["surface"], padx=8, pady=4)
+        legend.grid(row=1, column=0, sticky="ew", padx=8, pady=(0,4))
+        tk.Label(legend, text="☑ = im Pool (sichtbar im Picker)  |  ",
+                 bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["small"]).pack(side="left")
+        tk.Label(legend, text="Akzentfarbe = aktuell in Auswahl",
+                 bg=PAL["surface"], fg=PAL["accent"], font=self._fonts["small"]).pack(side="left")
+
+        # ── Buttons
+        btn_row = tk.Frame(win, bg=PAL["bg"])
+        btn_row.grid(row=2, column=0, sticky="ew", padx=8, pady=(0,8))
+        btn_row.columnconfigure((0,1,2), weight=1)
+
+        def do_apply():
+            new_pool = [code for code, var in check_vars.items() if var.get()]
+            self.cfg["hero_pool"] = new_pool
+            save_config(self.cfg)
+            self._rebuild_hero_grid()
+            self.status_var.set(f"Pool gespeichert: {len(new_pool)} Helden aktiv.")
+            win.destroy()
+
+        def do_reset():
+            for code, var in check_vars.items():
+                var.set(code in _DEFAULT_POOL)
+
+        tk.Button(btn_row, text="✔  Speichern & Schliessen",
+                  command=do_apply,
+                  bg=PAL["accent"], fg=PAL["bg"],
+                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["big_bold"], padx=6, pady=6, highlightthickness=0
+                  ).grid(row=0, column=0, sticky="ew", padx=(0,4))
+        tk.Button(btn_row, text="Standard",
+                  command=do_reset,
+                  bg=PAL["btn_bg"], fg=PAL["text"],
+                  activebackground=PAL["separator"], activeforeground=PAL["text"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["ui"], padx=6, pady=6, highlightthickness=0
+                  ).grid(row=0, column=1, sticky="ew", padx=4)
+        tk.Button(btn_row, text="Abbrechen",
+                  command=win.destroy,
+                  bg=PAL["btn_bg"], fg=PAL["text"],
+                  activebackground=PAL["separator"], activeforeground=PAL["text"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["ui"], padx=6, pady=6, highlightthickness=0
+                  ).grid(row=0, column=2, sticky="ew", padx=(4,0))
+
+        win.update_idletasks()
+        win.geometry("560x680")
+        rx = self.root.winfo_x() + self.root.winfo_width()//2  - 280
+        ry = self.root.winfo_y() + self.root.winfo_height()//2 - 340
+        win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Presets
+    # ──────────────────────────────────────────────────────────────────
+    def _rebuild_preset_buttons(self):
+        for w in self.preset_btn_frame.winfo_children():
+            w.destroy()
+        if hasattr(self, "_preset_extra_frame"):
+            for w in self._preset_extra_frame.winfo_children():
+                w.destroy()
+
+        presets    = self.cfg.get("presets", {})
+        startup    = self.cfg.get("startup_preset", "")
+        edit_mode  = getattr(self, "_preset_edit_mode", False)
+
+        if not presets:
+            tk.Label(self.preset_btn_frame, text="– noch keine Presets –",
+                     bg=PAL["surface"], fg=PAL["text_dim"],
+                     font=self._fonts["small"], anchor="w"
+                     ).grid(row=0, column=0, sticky="w", padx=4)
+            return
+
+        all_names = list(presets.keys())
+        pinned    = [n for n in self.cfg.get("pinned_presets", []) if n in presets]
+        unpinned  = [n for n in all_names if n not in pinned]
+
+        def _toggle_startup(name: str):
+            if self.cfg.get("startup_preset") == name:
+                self.cfg["startup_preset"] = ""
+                self.status_var.set("Startup-Preset entfernt.")
+            else:
+                self.cfg["startup_preset"] = name
+                self.status_var.set(f"⭐ Startup: '{name}' — wird beim nächsten Start geladen.")
+            save_config(self.cfg)
+            self._rebuild_preset_buttons()
+
+        def _make_btn(parent, name, row, col_start):
+            is_startup = (name == startup)
+            tk.Button(parent, text=name,
+                      command=lambda n=name: self.load_preset(n),
+                      bg=PAL["surface2"], fg=PAL["int_col"],
+                      activebackground=PAL["int_col"], activeforeground=PAL["bg"],
+                      relief="flat", bd=0, cursor="hand2",
+                      font=self._fonts["mono"],
+                      padx=2, pady=3, anchor="center",
+                      highlightthickness=1,
+                      highlightbackground=PAL["accent"] if is_startup else PAL["separator"],
+                      ).grid(row=row, column=col_start, padx=(0, 1), pady=(0, 2), sticky="ew")
+            # ⭐ Stern nur im Änderungsmodus
+            if edit_mode:
+                tk.Button(parent,
+                          text="⭐" if is_startup else "☆",
+                          command=lambda n=name: _toggle_startup(n),
+                          bg=PAL["surface2"],
+                          fg="#f0c040" if is_startup else PAL["text_dim"],
+                          activebackground=PAL["surface2"], activeforeground="#f0c040",
+                          relief="flat", bd=0, cursor="hand2",
+                          font=self._fonts["small"], padx=1, pady=3,
+                          highlightthickness=0,
+                          ).grid(row=row, column=col_start+1, padx=(0, 4), pady=(0, 2), sticky="w")
+
+        # Spalten konfigurieren
+        for parent in [self.preset_btn_frame] + ([self._preset_extra_frame] if hasattr(self, "_preset_extra_frame") else []):
+            for c in range(6):
+                if edit_mode:
+                    parent.columnconfigure(c, weight=1 if c % 2 == 0 else 0)
+                else:
+                    parent.columnconfigure(c, weight=1 if c < 3 else 0)
+
+        # Gepinnte → immer sichtbar (bis zu 3)
+        visible = pinned[:3] if pinned else all_names[:3]
+        for i, name in enumerate(visible):
+            col = i * 2 if edit_mode else i
+            _make_btn(self.preset_btn_frame, name, 0, col)
+
+        # Rest → aufklappbar
+        if hasattr(self, "_preset_extra_frame"):
+            rest = unpinned if pinned else all_names[3:]
+            for i, name in enumerate(rest):
+                r = i // 3
+                c = (i % 3) * 2 if edit_mode else (i % 3)
+                _make_btn(self._preset_extra_frame, name, r, c)
+
+    def open_preset_pin_manager(self):
+        """Dialog zum Auswählen welche 3 Presets fest angezeigt werden."""
+        presets = self.cfg.get("presets", {})
+        if not presets:
+            self.status_var.set("Noch keine Presets vorhanden.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Feste Presets auswählen")
+        win.configure(bg=PAL["bg"])
+        win.resizable(False, False)
+        win.grab_set()
+        win.focus_force()
+        win.columnconfigure(0, weight=1)
+        _apply_icon(win)
+
+        frm = tk.Frame(win, bg=PAL["surface"], padx=12, pady=10)
+        frm.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        frm.columnconfigure(0, weight=1)
+
+        tk.Label(frm, text="Wähle bis zu 3 Presets die immer sichtbar sind:",
+                 bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["ui"], anchor="w", wraplength=280
+                 ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        pinned = list(self.cfg.get("pinned_presets", []))
+        check_vars: dict[str, tk.BooleanVar] = {}
+        fb_var = tk.StringVar()
+
+        for i, name in enumerate(presets.keys()):
+            var = tk.BooleanVar(value=name in pinned)
+            check_vars[name] = var
+
+            row_bg = PAL["surface"] if i % 2 == 0 else PAL["btn_bg"]
+            cell   = tk.Frame(frm, bg=row_bg)
+            cell.grid(row=i+1, column=0, sticky="ew", pady=1)
+            cell.columnconfigure(1, weight=1)
+
+            cb = tk.Checkbutton(cell, variable=var,
+                                bg=row_bg, selectcolor=PAL["input_bg"],
+                                activebackground=row_bg,
+                                relief="flat", bd=0, cursor="hand2",
+                                highlightthickness=0)
+            cb.grid(row=0, column=0, padx=(4, 2))
+
+            tk.Label(cell, text=name,
+                     bg=row_bg, fg=PAL["accent"],
+                     font=self._fonts["mono"], anchor="w"
+                     ).grid(row=0, column=1, sticky="w", pady=3)
+
+            heroes = "  /  ".join(self.cfg["presets"].get(name, [])[:4])
+            tk.Label(cell, text=heroes,
+                     bg=row_bg, fg=PAL["text_dim"],
+                     font=self._fonts["small"], anchor="w"
+                     ).grid(row=0, column=2, sticky="w", padx=(6, 4))
+
+        # Feedback
+        tk.Label(frm, textvariable=fb_var,
+                 bg=PAL["surface"], fg=PAL["danger"],
+                 font=self._fonts["small"], anchor="w"
+                 ).grid(row=len(presets)+1, column=0, sticky="w", pady=(6, 0))
+
+        btn_row = tk.Frame(win, bg=PAL["bg"])
+        btn_row.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        btn_row.columnconfigure((0, 1), weight=1)
+
+        def do_save():
+            selected = [n for n, v in check_vars.items() if v.get()]
+            if len(selected) > 3:
+                fb_var.set(f"Maximal 3 Presets auswählen (aktuell: {len(selected)})")
+                return
+            self.cfg["pinned_presets"] = selected
+            save_config(self.cfg)
+            self._rebuild_preset_buttons()
+            self.status_var.set(f"Feste Presets: {', '.join(selected) if selected else '–'}")
+            win.destroy()
+
+        tk.Button(btn_row, text="✔  Speichern", command=do_save,
+                  bg=PAL["accent"], fg=PAL["bg"],
+                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["big_bold"], padx=6, pady=5, highlightthickness=0
+                  ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        tk.Button(btn_row, text="Abbrechen", command=win.destroy,
+                  bg=PAL["btn_bg"], fg=PAL["text"],
+                  activebackground=PAL["separator"], activeforeground=PAL["text"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["ui"], padx=6, pady=5, highlightthickness=0
+                  ).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+        win.update_idletasks()
+        rx = self.root.winfo_x() + self.root.winfo_width()//2  - win.winfo_width()//2
+        ry = self.root.winfo_y() + self.root.winfo_height()//2 - win.winfo_height()//2
+        win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
+
+    def load_preset(self, name: str):
+        heroes = self.cfg.get("presets",{}).get(name,[])
+        if not heroes:
+            self.status_var.set(f"Preset '{name}' leer.")
+            return
+        for code in list(self.selected_heroes):
+            self._set_button_selected(code, False)
+        self.selected_heroes = []
+        for code in heroes:
+            if code in self.hero_buttons:
+                self.selected_heroes.append(code)
+                self._set_button_selected(code, True)
+        self._update_selected_label()
+        self.status_var.set(f"Preset '{name}' geladen: {', '.join(self.selected_heroes)}")
+
+    def save_preset_dialog(self):
+        if not self.selected_heroes:
+            self.status_var.set("Keine Helden ausgewaehlt.")
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Preset speichern")
+        win.configure(bg=PAL["bg"])
+        win.resizable(False, False)
+        win.grab_set()
+        win.focus_force()
+        win.columnconfigure(0, weight=1)
+        _apply_icon(win)
+
+        frm = tk.Frame(win, bg=PAL["surface"], padx=12, pady=10)
+        frm.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        frm.columnconfigure(1, weight=1)
+
+        tk.Label(frm, text="Auswahl:", bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["small"]
+                 ).grid(row=0, column=0, columnspan=2, sticky="w")
+        tk.Label(frm, text="  /  ".join(self.selected_heroes),
+                 bg=PAL["surface"], fg=PAL["accent"], font=self._fonts["mono"]
+                 ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0,8))
+
+        tk.Label(frm, text="Preset-Name:", bg=PAL["surface"], fg=PAL["text"], font=self._fonts["ui"]
+                 ).grid(row=2, column=0, sticky="w", padx=(0,8))
+        name_var = tk.StringVar()
+        entry = tk.Entry(frm, textvariable=name_var, bg=PAL["input_bg"], fg=PAL["text"],
+                         insertbackground=PAL["accent"], relief="flat", bd=0, font=self._fonts["mono"],
+                         highlightthickness=1, highlightbackground=PAL["separator"],
+                         highlightcolor=PAL["accent"])
+        entry.grid(row=2, column=1, sticky="ew", pady=2)
+        entry.focus_set()
+
+        fb_var = tk.StringVar()
+        tk.Label(frm, textvariable=fb_var, bg=PAL["surface"], fg=PAL["success"], font=self._fonts["ui"]
+                 ).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6,0))
+
+        def do_save(evt=None):
+            pname = name_var.get().strip()
+            if not pname:
+                fb_var.set("Name darf nicht leer sein.")
+                return
+            self.cfg.setdefault("presets",{})[pname] = list(self.selected_heroes)
+            save_config(self.cfg)
+            self._rebuild_preset_buttons()
+            self.status_var.set(f"Preset '{pname}' gespeichert.")
+            win.destroy()
+
+        entry.bind("<Return>", do_save)
+
+        presets = self.cfg.get("presets",{})
+        if presets:
+            tk.Frame(frm, bg=PAL["separator"], height=1
+                     ).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10,4))
+            tk.Label(frm, text="Vorhandene Presets:",
+                     bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["ui_bold"], anchor="w"
+                     ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0,3))
+            for pi, (pname, phlist) in enumerate(list(presets.items())):
+                prow = 6+pi
+                tk.Label(frm, text=pname, bg=PAL["surface"], fg=PAL["accent"],
+                         font=self._fonts["mono"], anchor="w").grid(row=prow, column=0, sticky="w")
+                del_row = tk.Frame(frm, bg=PAL["surface"])
+                del_row.grid(row=prow, column=1, sticky="ew")
+                def make_del(n=pname):
+                    def _d():
+                        self.cfg["presets"].pop(n, None)
+                        save_config(self.cfg)
+                        self._rebuild_preset_buttons()
+                        win.destroy()
+                    return _d
+                tk.Button(del_row, text="X", command=make_del(),
+                          bg=PAL["surface"], fg=PAL["danger"],
+                          activebackground=PAL["danger"], activeforeground=PAL["bg"],
+                          relief="flat", bd=0, cursor="hand2", font=self._fonts["ui_bold"],
+                          padx=6, pady=2).pack(side="right")
+                tk.Label(del_row, text="  /  ".join(phlist), bg=PAL["surface"],
+                         fg=PAL["text_dim"], font=self._fonts["small"]).pack(side="left")
+
+        btn_row = tk.Frame(frm, bg=PAL["surface"])
+        btn_row.grid(row=100, column=0, columnspan=2, sticky="ew", pady=(10,0))
+        btn_row.columnconfigure((0,1), weight=1)
+        tk.Button(btn_row, text="Speichern", command=do_save,
+                  bg=PAL["accent"], fg=PAL["bg"], activebackground=PAL["success"],
+                  relief="flat", bd=0, cursor="hand2", font=self._fonts["big_bold"],
+                  padx=6, pady=5, highlightthickness=0).grid(row=0,column=0,sticky="ew",padx=(0,4))
+        tk.Button(btn_row, text="Abbrechen", command=win.destroy,
+                  bg=PAL["btn_bg"], fg=PAL["text"], activebackground=PAL["separator"],
+                  relief="flat", bd=0, cursor="hand2", font=self._fonts["ui"],
+                  padx=6, pady=5, highlightthickness=0).grid(row=0,column=1,sticky="ew",padx=(4,0))
+
+        win.update_idletasks()
+        rx = self.root.winfo_x() + self.root.winfo_width()//2  - win.winfo_width()//2
+        ry = self.root.winfo_y() + self.root.winfo_height()//2 - win.winfo_height()//2
+        win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Timing & Hotkey Dialog
+    # ──────────────────────────────────────────────────────────────────
+    def open_timing_config(self):
+        win = tk.Toplevel(self.root)
+        win.title("Zeiten & Hotkey")
+        win.configure(bg=PAL["bg"])
+        win.resizable(False, False)
+        win.grab_set()
+        win.focus_force()
+        win.columnconfigure(0, weight=1)
+        _apply_icon(win)
+
+        t = self.cfg.get("timings", {})
+
+        def section_lbl(parent, text, row):
+            f = tk.Frame(parent, bg=PAL["surface2"])
+            f.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(6,2))
+            tk.Label(f, text=f"  {text}", bg=PAL["surface2"], fg=PAL["accent"],
+                     font=self._fonts["section"], anchor="w", padx=4, pady=2).pack(fill="x")
+
+        frm = tk.Frame(win, bg=PAL["surface"], padx=10, pady=6)
+        frm.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,4))
+        frm.columnconfigure(1, weight=1)
+
+        timing_fields: dict[str, tk.StringVar] = {}
+        TIMING_ROWS = [
+            ("SPIELAUFLÖSUNG", None, None),
+            ("Spiel Breite",        "game_res_w",          "px  z.B. 1920"),
+            ("Spiel Höhe",          "game_res_h",          "px  z.B. 1200"),
+            ("PICK-ABLAUF", None, None),
+            ("Feld-Klick Pause",    "field_click_delay",   "s  Pause zwischen 2x Klick aufs Suchfeld"),
+            ("Tippdauer (gesamt)",  "type_duration",        "s  Budget fuer Namenseingabe"),
+            ("Enter-Pause",         "enter_pause",          "s  Warten nach Enter"),
+            ("Pick-Button Dauer",   "pick_duration",        "s  Klickzeit auf Pick-Button"),
+            ("Pick-Klick-Intervall","pick_click_interval",  "s  Pause zwischen Pick-Klicks"),
+            ("LOOP", None, None),
+            ("Schleifenpause",      "loop_pause",           "s  Extra Pause nach jedem Helden"),
+            ("Suchfeld Wartezeit",  "suchfeld_wait",        "s  Max. warten bis Suchfeld erscheint"),
+        ]
+
+        field_row = 0
+        game_res = self.cfg.get("game_res", [1920, 1200])
+        # Virtuelle timing-keys für Spielauflösung vorbelegen
+        t = dict(self.cfg.get("timings", {}))
+        t["game_res_w"] = str(game_res[0])
+        t["game_res_h"] = str(game_res[1])
+        for label, cfg_key, hint in TIMING_ROWS:
+            if cfg_key is None:
+                section_lbl(frm, label, field_row)
+                field_row += 1
+                continue
+            tk.Label(frm, text=label, bg=PAL["surface"], fg=PAL["text"],
+                     font=self._fonts["ui"], anchor="w"
+                     ).grid(row=field_row, column=0, sticky="w", padx=(0,8), pady=2)
+            var = tk.StringVar(value=str(t.get(cfg_key, DEFAULT_CONFIG["timings"].get(cfg_key,0))))
+            timing_fields[cfg_key] = var
+            entry_row = tk.Frame(frm, bg=PAL["surface"])
+            entry_row.grid(row=field_row, column=1, sticky="ew", pady=2)
+            tk.Entry(entry_row, textvariable=var, width=6,
+                     bg=PAL["input_bg"], fg=PAL["accent"], insertbackground=PAL["accent"],
+                     relief="flat", bd=0, font=self._fonts["mono"],
+                     highlightthickness=1, highlightbackground=PAL["separator"],
+                     highlightcolor=PAL["accent"], justify="right"
+                     ).pack(side="left")
+            tk.Label(entry_row, text=f"  {hint}", bg=PAL["surface"], fg=PAL["text_dim"],
+                     font=self._fonts["small"], anchor="w").pack(side="left", padx=(4,0))
+            field_row += 1
+
+        # Hotkey-Bereich
+        section_lbl(frm, "PICK-HOTKEY  (bis zu 3 Tasten)", field_row)
+        field_row += 1
+
+        current_combo = list(self.cfg.get("pick_hotkey",["end"]))
+        recorded_keys: list[str] = []
+        recording_active = [False]
+        combo_var = tk.StringVar(value=_hotkey_display(current_combo))
+
+        tk.Label(frm, text="Aktuell:", bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["ui"], anchor="w"
+                 ).grid(row=field_row, column=0, sticky="w", pady=2)
+        tk.Label(frm, textvariable=combo_var, bg=PAL["surface"], fg=PAL["accent"],
+                 font=self._fonts["mono"], anchor="w"
+                 ).grid(row=field_row, column=1, sticky="w", pady=2)
+        field_row += 1
+
+        rec_frame = tk.Frame(frm, bg=PAL["surface"])
+        rec_frame.grid(row=field_row, column=0, columnspan=2, sticky="ew", pady=(4,2))
+        field_row += 1
+
+        rec_hint  = tk.StringVar(value="Klick 'Aufnehmen', dann bis zu 3 Tasten druecken.")
+        tk.Label(rec_frame, textvariable=rec_hint, bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="w", wraplength=240
+                 ).pack(side="bottom", fill="x", pady=(2,0))
+
+        rec_entry = tk.Entry(rec_frame, width=1, bg=PAL["surface"], fg=PAL["surface"],
+                             insertbackground=PAL["surface"], relief="flat", bd=0, highlightthickness=0)
+        rec_entry.pack(side="left")
+        rec_btn_var = tk.StringVar(value="Aufnehmen")
+
+        def start_recording():
+            recorded_keys.clear()
+            recording_active[0] = True
+            rec_btn_var.set("Laeuft... (Esc=Abbruch)")
+            rec_hint.set("Tasten druecken (bis zu 3). Esc = abbrechen.")
+            combo_var.set("...")
+            rec_entry.focus_set()
+
+        def on_rec_key(evt):
+            if not recording_active[0]: return
+            if evt.keysym == "Escape":
+                recording_active[0] = False
+                rec_btn_var.set("Aufnehmen")
+                combo_var.set(_hotkey_display(current_combo))
+                rec_hint.set("Aufnahme abgebrochen.")
+                return "break"
+            ps = _TK_TO_PYNPUT.get(evt.keysym, evt.keysym.lower())
+            if ps not in recorded_keys:
+                recorded_keys.append(ps)
+            combo_var.set(_hotkey_display(recorded_keys))
+            if len(recorded_keys) >= 3:
+                recording_active[0] = False
+                rec_btn_var.set("Aufnehmen")
+                rec_hint.set("Aufnahme fertig. 'Speichern' zum Uebernehmen.")
+            return "break"
+
+        rec_entry.bind("<KeyPress>", on_rec_key)
+        tk.Button(rec_frame, textvariable=rec_btn_var, command=start_recording,
+                  bg=PAL["btn_bg"], fg=PAL["text"],
+                  activebackground=PAL["accent"], activeforeground=PAL["bg"],
+                  relief="flat", bd=0, cursor="hand2", font=self._fonts["ui"],
+                  padx=8, pady=4, highlightthickness=1, highlightbackground=PAL["separator"]
+                  ).pack(side="left", padx=(0,8))
+
+        tk.Frame(frm, bg=PAL["separator"], height=1
+                 ).grid(row=field_row, column=0, columnspan=2, sticky="ew", pady=(10,4))
+        field_row += 1
+
+        fb_var = tk.StringVar()
+        tk.Label(frm, textvariable=fb_var, bg=PAL["surface"], fg=PAL["success"],
+                 font=self._fonts["ui"], anchor="w"
+                 ).grid(row=field_row, column=0, columnspan=2, sticky="ew")
+        field_row += 1
+
+        btn_row = tk.Frame(frm, bg=PAL["surface"])
+        btn_row.grid(row=field_row, column=0, columnspan=2, sticky="ew", pady=(4,0))
+        btn_row.columnconfigure((0,1), weight=1)
+
+        def do_save():
+            new_timings = {}
+            new_game_res = list(self.cfg.get("game_res", [1920, 1200]))
+            for k, var in timing_fields.items():
+                # Spielauflösung separat behandeln
+                if k == "game_res_w":
+                    try: new_game_res[0] = int(float(var.get()))
+                    except: fb_var.set("Ungültige Spielbreite."); return
+                    continue
+                if k == "game_res_h":
+                    try: new_game_res[1] = int(float(var.get()))
+                    except: fb_var.set("Ungültige Spielhöhe."); return
+                    continue
+                try:
+                    val = float(var.get().replace(",","."))
+                    if val < 0: raise ValueError
+                    new_timings[k] = val
+                except ValueError:
+                    fb_var.set(f"Ungueltig: '{k}' muss positive Zahl sein.")
+                    return
+            new_hotkey = list(recorded_keys) if recorded_keys else list(current_combo)
+            if not new_hotkey:
+                fb_var.set("Hotkey darf nicht leer sein.")
+                return
+            self.cfg["timings"]     = new_timings
+            self.cfg["pick_hotkey"] = new_hotkey
+            self.cfg["game_res"]    = new_game_res
+            save_config(self.cfg)
+            self.hotkey_label.config(text=_hotkey_display(new_hotkey))
+            self.status_var.set(f"Gespeichert.  Pick = {_hotkey_display(new_hotkey)}")
+            fb_var.set("Gespeichert!")
+            win.after(800, win.destroy)
+
+        tk.Button(btn_row, text="Speichern", command=do_save,
+                  bg=PAL["accent"], fg=PAL["bg"], activebackground=PAL["success"],
+                  relief="flat", bd=0, cursor="hand2", font=self._fonts["big_bold"],
+                  padx=6, pady=5, highlightthickness=0
+                  ).grid(row=0, column=0, sticky="ew", padx=(0,4))
+        tk.Button(btn_row, text="Abbrechen", command=win.destroy,
+                  bg=PAL["btn_bg"], fg=PAL["text"], activebackground=PAL["separator"],
+                  relief="flat", bd=0, cursor="hand2", font=self._fonts["ui"],
+                  padx=6, pady=5, highlightthickness=0
+                  ).grid(row=0, column=1, sticky="ew", padx=(4,0))
+
+        win.update_idletasks()
+        rx = self.root.winfo_x() + self.root.winfo_width()//2  - win.winfo_width()//2
+        ry = self.root.winfo_y() + self.root.winfo_height()//2 - win.winfo_height()//2
+        win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Hero Manager (eigene Helden hinzufügen/entfernen)
+    # ──────────────────────────────────────────────────────────────────
+    def open_hero_manager(self):
+        win = tk.Toplevel(self.root)
+        win.title("Eigene Helden")
+        win.configure(bg=PAL["bg"])
+        win.resizable(False, False)
+        win.grab_set()
+        win.focus_force()
+        win.columnconfigure(0, weight=1)
+        _apply_icon(win)
+
+        frm = tk.Frame(win, bg=PAL["surface"], padx=10, pady=8)
+        frm.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,4))
+        frm.columnconfigure(1, weight=1)
+
+        def lbl(row, text):
+            tk.Label(frm, text=text, bg=PAL["surface"], fg=PAL["text_dim"],
+                     font=self._fonts["ui"], anchor="w"
+                     ).grid(row=row, column=0, sticky="w", pady=2, padx=(0,8))
+
+        def inp(row):
+            e = tk.Entry(frm, bg=PAL["input_bg"], fg=PAL["text"],
+                         insertbackground=PAL["accent"], relief="flat", bd=0,
+                         font=self._fonts["mono"], highlightthickness=1,
+                         highlightbackground=PAL["separator"], highlightcolor=PAL["accent"])
+            e.grid(row=row, column=1, sticky="ew", pady=2)
+            return e
+
+        lbl(0, "Kuerzel (Tipp-Text)*")
+        e_code = inp(0)
+        tk.Label(frm, text="Dieser Text wird im Spiel eingetippt (z.B. cm)",
+                 bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["small"], anchor="w"
+                 ).grid(row=1, column=1, sticky="w", pady=(0,5))
+
+        lbl(2, "Anzeigename")
+        e_name = inp(2)
+        tk.Label(frm, text="Lesbarer Name (z.B. Crystal Maiden) — optional",
+                 bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["small"], anchor="w"
+                 ).grid(row=3, column=1, sticky="w", pady=(0,5))
+
+        lbl(4, "Kategorie")
+        attr_var = tk.StringVar(value="Intelligence")
+        rb_row = tk.Frame(frm, bg=PAL["surface"])
+        rb_row.grid(row=4, column=1, sticky="w", pady=2)
+        for attr in ATTR_ORDER:
+            tk.Radiobutton(rb_row, text=attr, variable=attr_var, value=attr,
+                           bg=PAL["surface"], fg=ATTR_COLORS[attr],
+                           selectcolor=PAL["input_bg"],
+                           activebackground=PAL["surface"], activeforeground=ATTR_COLORS[attr],
+                           font=self._fonts["ui"], bd=0, cursor="hand2"
+                           ).pack(side="left", padx=(0,10))
+
+        fb_var = tk.StringVar()
+        tk.Label(frm, textvariable=fb_var, bg=PAL["surface"], fg=PAL["success"],
+                 font=self._fonts["ui"], anchor="w"
+                 ).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6,0))
+
+        def do_add():
+            code = e_code.get().strip().lower()
+            name = e_name.get().strip()
+            attr = attr_var.get()
+            if not code:
+                fb_var.set("Kuerzel darf nicht leer sein.")
+                return
+            heroes = _build_heroes(self.cfg.get("hero_pool",[]), self.cfg.get("custom_heroes",[]))
+            all_codes = [c for lst in heroes.values() for c, _ in lst]
+            # Also check master list
+            master_codes = [c for lst in ALL_HEROES_MASTER.values() for c, _ in lst]
+            if code in all_codes or code in master_codes:
+                fb_var.set(f"'{code}' ist bereits vorhanden.")
+                return
+            self.cfg.setdefault("custom_heroes",[]).append({"code":code,"name":name or code,"attr":attr})
+            # Auch zum Pool hinzufuegen
+            self.cfg.setdefault("hero_pool",[]).append(code)
+            save_config(self.cfg)
+            self._rebuild_hero_grid()
+            _refresh_list()
+            e_code.delete(0,"end")
+            e_name.delete(0,"end")
+            fb_var.set(f"'{code}' ({attr}) hinzugefuegt.")
+            self.status_var.set(f"Held '{code}' hinzugefuegt.")
+
+        tk.Button(frm, text="  Held hinzufuegen  ", command=do_add,
+                  bg=PAL["accent"], fg=PAL["bg"],
+                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  relief="flat", bd=0, cursor="hand2", font=self._fonts["big_bold"],
+                  padx=6, pady=5, highlightthickness=0
+                  ).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10,0))
+
+        # Trennlinie
+        tk.Frame(win, bg=PAL["separator"], height=1).grid(row=1, column=0, sticky="ew", padx=10, pady=6)
+
+        tk.Label(win, text="  Eigene Helden  (X = loeschen)",
+                 bg=PAL["bg"], fg=PAL["text_dim"],
+                 font=self._fonts["ui_bold"], anchor="w"
+                 ).grid(row=2, column=0, sticky="ew", padx=10)
+
+        list_wrap = tk.Frame(win, bg=PAL["bg"])
+        list_wrap.grid(row=3, column=0, sticky="nsew", padx=10, pady=(2,10))
+        list_wrap.columnconfigure(0, weight=1)
+
+        list_frame = tk.Frame(list_wrap, bg=PAL["surface"])
+        list_frame.grid(row=0, column=0, sticky="ew")
+        list_frame.columnconfigure(1, weight=1)
+
+        def _refresh_list():
+            for w in list_frame.winfo_children():
+                w.destroy()
+            custom = self.cfg.get("custom_heroes",[])
+            if not custom:
+                tk.Label(list_frame, text="  - noch keine eigenen Helden -",
+                         bg=PAL["surface"], fg=PAL["text_dim"],
+                         font=self._fonts["ui"], anchor="w", pady=5
+                         ).grid(row=0, column=0, sticky="ew")
+                return
+            for ci, hdr_txt in enumerate(["Kuerzel","Name","Kategorie",""]):
+                tk.Label(list_frame, text=hdr_txt, bg=PAL["surface2"], fg=PAL["text_dim"],
+                         font=self._fonts["small"], anchor="w", padx=4, pady=2
+                         ).grid(row=0, column=ci, sticky="ew")
+            for i, entry in enumerate(custom):
+                row = i+1
+                bg    = PAL["surface"] if i%2==0 else PAL["btn_bg"]
+                color = ATTR_COLORS.get(entry.get("attr","Universal"), PAL["text"])
+                tk.Label(list_frame, text=entry.get("code",""), bg=bg, fg=PAL["accent"],
+                         font=self._fonts["mono"], anchor="w", padx=4, pady=3
+                         ).grid(row=row, column=0, sticky="ew")
+                tk.Label(list_frame, text=entry.get("name",""), bg=bg, fg=PAL["text"],
+                         font=self._fonts["ui"], anchor="w", padx=4
+                         ).grid(row=row, column=1, sticky="ew")
+                tk.Label(list_frame, text=entry.get("attr",""), bg=bg, fg=color,
+                         font=self._fonts["small"], anchor="w", padx=4
+                         ).grid(row=row, column=2, sticky="ew")
+                def make_del(idx=i):
+                    def _d():
+                        removed_code = self.cfg["custom_heroes"][idx].get("code","")
+                        self.cfg["custom_heroes"].pop(idx)
+                        # Auch aus Pool entfernen
+                        if removed_code in self.cfg.get("hero_pool",[]):
+                            self.cfg["hero_pool"].remove(removed_code)
+                        save_config(self.cfg)
+                        self._rebuild_hero_grid()
+                        _refresh_list()
+                        self.status_var.set("Held geloescht.")
+                    return _d
+                tk.Button(list_frame, text="X", command=make_del(),
+                          bg=bg, fg=PAL["danger"],
+                          activebackground=PAL["danger"], activeforeground=PAL["bg"],
+                          relief="flat", bd=0, cursor="hand2",
+                          font=self._fonts["ui_bold"], padx=6, pady=2
+                          ).grid(row=row, column=3, sticky="ew")
+
+        _refresh_list()
+        win.update_idletasks()
+        rx = self.root.winfo_x() + self.root.winfo_width()//2  - win.winfo_width()//2
+        ry = self.root.winfo_y() + self.root.winfo_height()//2 - win.winfo_height()//2
+        win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Bilderkennung
+    # ──────────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────
+    # Item-Set Editor
+    # ──────────────────────────────────────────────────────────────────
+    def open_item_set_editor(self):
+        """Öffnet den Editor für Item-Sets (3 Sets × 6 Items)."""
+        win = tk.Toplevel(self.root)
+        win.title("Item-Sets verwalten")
+        win.configure(bg=PAL["bg"])
+        win.grab_set()
+        win.focus_force()
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+        _apply_icon(win)
+
+        # Header
+        hdr = tk.Frame(win, bg=PAL["surface2"])
+        hdr.grid(row=0, column=0, sticky="ew")
+        tk.Label(hdr, text="  🛒  Item-Sets  (bis zu 6 Items pro Set)",
+                 bg=PAL["surface2"], fg=PAL["accent"],
+                 font=self._fonts["section"], anchor="w", padx=6, pady=4
+                 ).pack(fill="x")
+
+        # Item-Phase aktivieren Toggle
+        ip_frame = tk.Frame(win, bg=PAL["surface"], padx=8, pady=4)
+        ip_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
+        ip_var = tk.BooleanVar(value=self.cfg.get("item_phase_enabled", True))
+
+        def _toggle_item_phase():
+            self.cfg["item_phase_enabled"] = ip_var.get()
+            save_config(self.cfg)
+
+        tk.Checkbutton(ip_frame, text="Phase C (Item-Kauf) aktiviert",
+                       variable=ip_var, command=_toggle_item_phase,
+                       bg=PAL["surface"], fg=PAL["text"],
+                       selectcolor=PAL["input_bg"],
+                       activebackground=PAL["surface"], activeforeground=PAL["accent"],
+                       font=self._fonts["ui"], bd=0, cursor="hand2"
+                       ).pack(side="left")
+
+        # Notebook für 3 Sets
+        style = ttk.Style()
+        style.configure("Item.TNotebook", background=PAL["bg"], borderwidth=0)
+        style.configure("Item.TNotebook.Tab",
+                        background=PAL["btn_bg"], foreground=PAL["text_dim"],
+                        padding=[8, 3], font=("Segoe UI", 7, "bold"))
+        style.map("Item.TNotebook.Tab",
+                  background=[("selected", PAL["surface2"])],
+                  foreground=[("selected", PAL["accent"])])
+
+        nb = ttk.Notebook(win, style="Item.TNotebook")
+        nb.grid(row=1, column=0, sticky="nsew", padx=10, pady=8)
+
+        item_sets   = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
+        name_vars:  list[tk.StringVar] = []
+        label_vars: list[list[tk.StringVar]] = []
+
+        for set_idx in range(6):
+            s = item_sets[set_idx] if set_idx < len(item_sets) else {"name": f"Set {set_idx+1}", "items": []}
+            tab = tk.Frame(nb, bg=PAL["surface"])
+            tab.columnconfigure(1, weight=1)
+
+            # Set-Name
+            nm_var = tk.StringVar(value=s.get("name", f"Set {set_idx+1}"))
+            name_vars.append(nm_var)
+            tk.Label(tab, text="Set-Name:", bg=PAL["surface"], fg=PAL["text_dim"],
+                     font=self._fonts["small"], anchor="w"
+                     ).grid(row=0, column=0, sticky="w", padx=(6,4), pady=(6,4))
+            tk.Entry(tab, textvariable=nm_var, bg=PAL["input_bg"], fg=PAL["text"],
+                     insertbackground=PAL["accent"], relief="flat", bd=0,
+                     font=self._fonts["mono"], highlightthickness=1,
+                     highlightbackground=PAL["separator"], highlightcolor=PAL["accent"]
+                     ).grid(row=0, column=1, sticky="ew", padx=(0,6), pady=(6,4))
+
+            # Trennlinie
+            tk.Frame(tab, bg=PAL["separator"], height=1
+                     ).grid(row=1, column=0, columnspan=3, sticky="ew", padx=6, pady=(0,4))
+
+            set_label_vars: list[tk.StringVar] = []
+            items = s.get("items", [])
+
+            default_labels = ["Boots", "Iron Branch", "Stick",
+                              "Item 4", "Item 5", "Item 6"]
+
+            for item_idx in range(6):
+                item = items[item_idx] if item_idx < len(items) else {}
+                lbl_var = tk.StringVar(value=item.get("label", default_labels[item_idx]))
+                set_label_vars.append(lbl_var)
+
+                item_path = _BASE_DIR / item.get("file", f"gterminal_{set_idx+1}_{item_idx+1}.png")
+                has_tmpl  = item_path.exists()
+                row_bg    = PAL["surface"] if item_idx % 2 == 0 else PAL["btn_bg"]
+
+                cell = tk.Frame(tab, bg=row_bg)
+                cell.grid(row=2+item_idx, column=0, columnspan=3, sticky="ew", padx=4, pady=1)
+                cell.columnconfigure(1, weight=1)
+
+                tk.Label(cell, text=f"{item_idx+1}.",
+                         bg=row_bg, fg=PAL["text_dim"],
+                         font=self._fonts["small"], width=2, anchor="e"
+                         ).grid(row=0, column=0, padx=(4,4))
+
+                tk.Entry(cell, textvariable=lbl_var,
+                         bg=row_bg, fg=PAL["text"],
+                         insertbackground=PAL["accent"], relief="flat", bd=0,
+                         font=self._fonts["mono"], highlightthickness=1,
+                         highlightbackground=PAL["separator"],
+                         highlightcolor=PAL["accent"]
+                         ).grid(row=0, column=1, sticky="ew", padx=(0,4), pady=2)
+
+                # Template-Status + Aufnahme-Button
+                status_txt = "✔" if has_tmpl else "✗"
+                status_fg  = PAL["success"] if has_tmpl else PAL["danger"]
+                status_lbl = tk.Label(cell, text=status_txt,
+                                      bg=row_bg, fg=status_fg,
+                                      font=self._fonts["mono"], width=2)
+                status_lbl.grid(row=0, column=2, padx=(0,2))
+
+                def make_capture(si=set_idx, ii=item_idx, slbl=status_lbl):
+                    def _capture():
+                        fname = f"gterminal_{si+1}_{ii+1}.png"
+                        tpath = _BASE_DIR / fname
+                        slbl.config(text="3s...", fg=PAL["accent"])
+                        win.update_idletasks()
+                        def _do():
+                            time.sleep(3)
+                            try:
+                                self._capture_template(tpath, region_w=60, region_h=60)
+                                self.root.after(0, lambda: slbl.config(text="✔", fg=PAL["success"]))
+                            except Exception as e:
+                                self.root.after(0, lambda err=e: slbl.config(
+                                    text="✗", fg=PAL["danger"]))
+                        threading.Thread(target=_do, daemon=True).start()
+                    return _capture
+
+                def make_delete(si=set_idx, ii=item_idx, slbl=status_lbl):
+                    def _delete():
+                        tpath = _BASE_DIR / f"gterminal_{si+1}_{ii+1}.png"
+                        try:
+                            if tpath.exists():
+                                tpath.unlink()
+                            slbl.config(text="✗", fg=PAL["danger"])
+                        except Exception:
+                            pass
+                    return _delete
+
+                tk.Button(cell, text="📷",
+                          command=make_capture(),
+                          bg=row_bg, fg=PAL["int_col"],
+                          relief="flat", bd=0, cursor="hand2",
+                          font=self._fonts["small"], padx=4, pady=1,
+                          highlightthickness=0
+                          ).grid(row=0, column=3, padx=(0,2))
+
+                tk.Button(cell, text="🗑",
+                          command=make_delete(),
+                          bg=row_bg, fg=PAL["danger"],
+                          activebackground=PAL["danger"], activeforeground=PAL["bg"],
+                          relief="flat", bd=0, cursor="hand2",
+                          font=self._fonts["small"], padx=4, pady=1,
+                          highlightthickness=0
+                          ).grid(row=0, column=4, padx=(0,4))
+
+            label_vars.append(set_label_vars)
+            nb.add(tab, text=s.get("name", f"Set {set_idx+1}"))
+
+        # Speichern
+        fb_var = tk.StringVar()
+        tk.Label(win, textvariable=fb_var, bg=PAL["bg"], fg=PAL["success"],
+                 font=self._fonts["small"], anchor="w", padx=10
+                 ).grid(row=2, column=0, sticky="ew", pady=(0,2))
+
+        btn_row = tk.Frame(win, bg=PAL["bg"])
+        btn_row.grid(row=3, column=0, sticky="ew", padx=10, pady=(0,10))
+        btn_row.columnconfigure((0,1), weight=1)
+
+        def do_save():
+            sets = self.cfg.get("item_sets", [])
+            while len(sets) < 6:
+                sets.append({"name": f"Set {len(sets)+1}", "items": []})
+            for si in range(6):
+                sets[si]["name"] = name_vars[si].get().strip() or f"Set {si+1}"
+                while len(sets[si]["items"]) < 6:
+                    n = len(sets[si]["items"]) + 1
+                    sets[si]["items"].append({"label": f"Item {n}",
+                                              "file":  f"gterminal_{si+1}_{n}.png"})
+                for ii in range(6):
+                    sets[si]["items"][ii]["label"] = label_vars[si][ii].get().strip()
+                # Tab-Text aktualisieren
+                nb.tab(si, text=sets[si]["name"])
+            self.cfg["item_sets"] = sets
+            save_config(self.cfg)
+            self._refresh_item_set_btns()
+            fb_var.set("✔ Gespeichert!")
+
+        tk.Button(btn_row, text="✔  Speichern", command=do_save,
+                  bg=PAL["accent"], fg=PAL["bg"],
+                  activebackground=PAL["success"], activeforeground=PAL["bg"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["big_bold"], padx=6, pady=5, highlightthickness=0
+                  ).grid(row=0, column=0, sticky="ew", padx=(0,4))
+        tk.Button(btn_row, text="Abbrechen", command=win.destroy,
+                  bg=PAL["btn_bg"], fg=PAL["text"],
+                  activebackground=PAL["separator"], activeforeground=PAL["text"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["ui"], padx=6, pady=5, highlightthickness=0
+                  ).grid(row=0, column=1, sticky="ew", padx=(4,0))
+
+        win.update_idletasks()
+        win.geometry("420x520")
+        rx = self.root.winfo_x() + self.root.winfo_width()//2  - 210
+        ry = self.root.winfo_y() + self.root.winfo_height()//2 - 260
+        win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
+
+    def test_image_recognition(self):
+        """
+        Testet beide Templates auf dem aktuellen Bildschirm,
+        zeigt Match-Score und speichert ein Debug-Bild mit markiertem Treffer.
+        """
+        if not CV2_AVAILABLE:
+            self.status_var.set("opencv nicht installiert — pip install opencv-python mss")
+            return
+
+        def _run():
+            try:
+                import mss
+                with mss.mss() as sct:
+                    mon = sct.monitors[1]
+                    raw = sct.grab(mon)
+                    screen_np = np.array(raw)
+
+                screen_bgr = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2BGR)
+                screen_g   = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+                debug_img  = screen_bgr.copy()
+                results    = []
+
+                for tpath, label in (
+                    (FIELD_TEMPLATE_PATH,   "Suchfeld"),
+                    (AUSWAHL_TEMPLATE_PATH, "Auswählen"),
+                ):
+                    if not tpath.exists():
+                        results.append(f"{label}: ✗ Template fehlt")
+                        continue
+
+                    tmpl = cv2.imread(str(tpath), cv2.IMREAD_GRAYSCALE)
+                    if tmpl is None:
+                        results.append(f"{label}: ✗ Template nicht lesbar")
+                        continue
+
+                    sh, sw = screen_g.shape
+                    th, tw = tmpl.shape
+                    if th > sh or tw > sw:
+                        results.append(f"{label}: ✗ Template ({tw}×{th}) > Screen ({sw}×{sh})")
+                        continue
+
+                    res = cv2.matchTemplate(screen_g, tmpl, cv2.TM_CCOEFF_NORMED)
+                    _, mv, _, ml = cv2.minMaxLoc(res)
+
+                    if mv >= 0.65:
+                        # Treffer einzeichnen
+                        cx = ml[0] + tw // 2
+                        cy = ml[1] + th // 2
+                        cv2.rectangle(debug_img,
+                                      (ml[0], ml[1]),
+                                      (ml[0] + tw, ml[1] + th),
+                                      (0, 255, 0), 3)
+                        cv2.putText(debug_img, f"{label} {mv:.2f}",
+                                    (ml[0], ml[1] - 8),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                                    (0, 255, 0), 2)
+                        results.append(f"{label}: ✔ {mv:.2f}  @  ({cx},{cy})")
+                    else:
+                        results.append(f"{label}: ✗ {mv:.2f}  (zu niedrig, min 0.65)")
+
+                # Screen-Info hinzufügen
+                sh, sw = screen_g.shape
+                cv2.putText(debug_img, f"Screen: {sw}x{sh}",
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                            (255, 255, 0), 2)
+
+                # Debug-Bild speichern (verkleinert damit es handhabbar ist)
+                scale     = min(1.0, 1920 / sw)
+                debug_small = cv2.resize(debug_img,
+                                          (int(sw * scale), int(sh * scale)))
+                debug_path = _BASE_DIR / "gterminal_debug_match.png"
+                cv2.imwrite(str(debug_path), debug_small)
+
+                msg = "  |  ".join(results) + f"  →  Debug: {debug_path.name}"
+                self.root.after(0, lambda m=msg: self.status_var.set(m))
+
+                # Ordner öffnen
+                self.root.after(200, lambda: open_folder(str(_BASE_DIR)))
+
+            except Exception as e:
+                self.root.after(0, lambda err=e: self.status_var.set(
+                    f"Test Fehler: {err}"))
+
+        self.status_var.set("Teste Bilderkennung...")
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _find_on_screen(self, template_path: Path, confidence: float = 0.70):
+        """
+        Screenshot via mss (native Auflösung, keine Skalierung) → Template-Match.
+        Template und Screenshot müssen in derselben Auflösung aufgenommen worden sein.
+        Speichert ein Debug-Bild wenn kein Match gefunden wird.
+        """
+        if not CV2_AVAILABLE or not template_path.exists():
+            return None
+        try:
+            import mss
+            with mss.mss() as sct:
+                mon = sct.monitors[1]
+                raw = sct.grab(mon)
+                screen_np = np.array(raw)
+
+            screen_bgr = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2BGR)
+            screen_g   = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+            template   = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+
+            if template is None:
+                self.root.after(0, lambda: self.status_var.set(
+                    f"⚠ Template konnte nicht geladen werden: {template_path.name}"))
+                return None
+
+            sh, sw = screen_g.shape
+            th, tw = template.shape
+
+            # Template darf nicht größer als Screenshot sein
+            if th > sh or tw > sw:
+                self.root.after(0, lambda: self.status_var.set(
+                    f"⚠ Template ({tw}×{th}) größer als Screen ({sw}×{sh}) — neu aufnehmen!"))
+                return None
+
+            result = cv2.matchTemplate(screen_g, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+            # Match-Score immer in Statuszeile anzeigen
+            self.root.after(0, lambda v=max_val, p=template_path.name: self.status_var.set(
+                f"Match {p}: {v:.2f}  {'✔' if v >= confidence else '✗ zu niedrig (min ' + str(confidence) + ')'}"
+            ))
+
+            if max_val >= confidence:
+                cx = max_loc[0] + tw // 2
+                cy = max_loc[1] + th // 2
+                return (cx, cy)
+
+            # Kein Match → Debug-Bild speichern damit man sieht was der Screen zeigt
+            debug_path = _BASE_DIR / f"debug_{template_path.stem}.png"
+            try:
+                cv2.imwrite(str(debug_path), screen_bgr)
+            except Exception:
+                pass
+
+        except Exception as e:
+            self.root.after(0, lambda err=e: self.status_var.set(
+                f"Bilderkennung Fehler: {err}"))
+        return None
+
+    def _capture_template(self, template_path: Path, region_w: int = 200, region_h: int = 80):
+        """
+        Screenshot der Maus-Region via mss — KEINE Skalierung.
+        Die Region wird in der aktuellen nativen Bildschirmauflösung gespeichert.
+        Template und spätere Suche müssen in derselben Auflösung sein.
+        """
+        import mss
+        pos = pyautogui.position()
+        x   = max(0, pos.x - region_w // 2)
+        y   = max(0, pos.y - region_h // 2)
+        with mss.mss() as sct:
+            region  = {"left": x, "top": y, "width": region_w, "height": region_h}
+            raw     = sct.grab(region)
+            img     = np.array(raw)
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            cv2.imwrite(str(template_path), img_bgr)
+        return pos
+
+    def open_image_calib_dialog(self):
+        if not CV2_AVAILABLE:
+            messagebox.showerror("Fehlende Pakete",
+                                 "Bilderkennung nicht verfuegbar.\n\n"
+                                 "Bitte installieren:\n  pip install opencv-python mss")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Bild-Kalibrierung")
+        win.configure(bg=PAL["bg"])
+        win.resizable(True, True)
+        win.grab_set()
+        win.focus_force()
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+        _apply_icon(win)
+
+        # ── Status-Zeile oben (fix) ───────────────────────────────────
+        info_var = tk.StringVar(value="")
+        info_lbl = tk.Label(win, textvariable=info_var, bg=PAL["bg"], fg=PAL["accent"],
+                            font=self._fonts["mono"], anchor="w", wraplength=440, padx=10, pady=4)
+        info_lbl.grid(row=0, column=0, sticky="ew")
+
+        # ── Scrollbarer Inhaltsbereich ────────────────────────────────
+        outer = tk.Frame(win, bg=PAL["bg"])
+        outer.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(outer, bg=PAL["bg"], highlightthickness=0)
+        sb     = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+
+        inner = tk.Frame(canvas, bg=PAL["bg"])
+        cwin  = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.columnconfigure(0, weight=1)
+
+        def _on_canvas_resize(evt):
+            canvas.itemconfig(cwin, width=evt.width)
+        canvas.bind("<Configure>", _on_canvas_resize)
+        inner.bind("<Configure>", lambda e: canvas.configure(
+            scrollregion=canvas.bbox("all")))
+        canvas.bind_all("<MouseWheel>",
+            lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        frm = tk.Frame(inner, bg=PAL["surface"], padx=12, pady=10)
+        frm.pack(fill="x", padx=10, pady=10)
+
+        # Speicherort-Info
+        tk.Label(frm,
+                 text=f"Templates werden gespeichert in:\n  {_BASE_DIR}",
+                 bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="w", justify="left"
+                 ).pack(fill="x", pady=(0, 6))
+
+        def _status(text, color=None):
+            info_var.set(text)
+            if color: info_lbl.config(fg=color)
+            win.update_idletasks()
+
+        def _countdown_and_capture(template_path, label):
+            for i in range(3, 0, -1):
+                if not win.winfo_exists(): return
+                self.root.after(0, lambda n=i, lbl=label: _status(
+                    f"{lbl}  —  Noch {n} Sekunde(n)...", PAL["accent"]))
+                time.sleep(1)
+            if not win.winfo_exists(): return
+            try:
+                pos = self._capture_template(template_path)
+                self.root.after(0, lambda p=pos, lbl=label: _status(
+                    f"✔  {lbl}  —  gespeichert ({p.x},{p.y})  →  {template_path.name}",
+                    PAL["success"]))
+            except Exception as e:
+                self.root.after(0, lambda err=e: _status(f"Fehler: {err}", PAL["danger"]))
+
+        def start_capture(template_path, label, status_lbl):
+            status_lbl.config(text="Warte...", fg=PAL["text_dim"])
+            _status(f"{label}  —  Maus auf das Element hovern...", PAL["text_dim"])
+            threading.Thread(target=_countdown_and_capture,
+                             args=(template_path, label), daemon=True).start()
+
+        def make_card(parent, title, desc, tpath, color, lbl_ref):
+            card = tk.Frame(parent, bg=PAL["surface2"], padx=8, pady=6)
+            card.pack(fill="x", pady=(0, 6))
+            card.columnconfigure(0, weight=1)
+            tk.Label(card, text=title, bg=PAL["surface2"], fg=color,
+                     font=self._fonts["ui_bold"], anchor="w"
+                     ).grid(row=0, column=0, sticky="w")
+            tk.Label(card, text=desc, bg=PAL["surface2"], fg=PAL["text_dim"],
+                     font=self._fonts["small"], anchor="w", justify="left"
+                     ).grid(row=1, column=0, sticky="w", pady=(2, 6))
+            exists = tpath.exists()
+            sl = tk.Label(card,
+                          text="✔ Template vorhanden" if exists else "✗ Noch kein Template",
+                          bg=PAL["surface2"],
+                          fg=PAL["success"] if exists else PAL["danger"],
+                          font=self._fonts["small"])
+            sl.grid(row=2, column=0, sticky="w", pady=(0, 4))
+            lbl_ref.append(sl)
+            tk.Button(card,
+                      text=f"📷  {title.split('.')[0].strip()} erfassen  (3s Countdown)",
+                      command=lambda: start_capture(tpath, title.split(".")[0].strip(), sl),
+                      bg=PAL["btn_bg"], fg=PAL["text"],
+                      activebackground=color, activeforeground=PAL["bg"],
+                      relief="flat", bd=0, cursor="hand2",
+                      font=self._fonts["ui"], padx=6, pady=5, highlightthickness=0
+                      ).grid(row=3, column=0, sticky="ew")
+
+        make_card(frm, "1. HELDEN-SUCHFELD",
+                  "Maus auf das Suchfeld (AAAAA Texteingabe) im Spiel hovern.",
+                  FIELD_TEMPLATE_PATH, PAL["int_col"], [])
+        make_card(frm, "2. PICK-BUTTON  ('Auswählen')",
+                  "Maus auf den 'AUSWÄHLEN' Button im Spiel hovern.",
+                  AUSWAHL_TEMPLATE_PATH, PAL["str_col"], [])
+        make_card(frm, "3. PLANUNG  (Item-Phase Erkennung)",
+                  "Maus auf den 'PLANUNG'-Schriftzug im Spiel hovern.",
+                  PLANUNG_TEMPLATE_PATH, PAL["uni_col"], [])
+        make_card(frm, "4. NEUTRALE POSITION  (nach Item-Kauf)",
+                  "Leere Stelle im Shop hovern.\n"
+                  "Maus springt dorthin nach jedem Rechtsklick,\n"
+                  "damit Tooltips die nächsten Items nicht verdecken.",
+                  NEUTRAL_POS_PATH, PAL["agi_col"], [])
+
+        # Ordner öffnen Button
+        tk.Button(frm, text="📂  Speicherordner öffnen",
+                  command=lambda: open_folder(str(_BASE_DIR)),
+                  bg=PAL["btn_bg"], fg=PAL["text"],
+                  activebackground=PAL["surface2"], activeforeground=PAL["accent"],
+                  relief="flat", bd=0, cursor="hand2",
+                  font=self._fonts["ui"], padx=6, pady=4, highlightthickness=0
+                  ).pack(fill="x", pady=(8, 0))
+
+        win.update_idletasks()
+        win.geometry("480x700")
+        rx = self.root.winfo_x() + self.root.winfo_width()//2 - 240
+        ry = max(0, self.root.winfo_y() + self.root.winfo_height()//2 - 350)
+        win.geometry(f"+{max(0,rx)}+{ry}")
+    # ──────────────────────────────────────────────────────────────────
+    def _on_global_key_press(self, key):
+        self.pressed_keys.add(key)
+        if key == keyboard.Key.home:
+            self.root.after(0, lambda: self.start_enter()); return
+        if key == keyboard.Key.backspace:
+            self.root.after(0, lambda: self.stop_all_macros()); return
+        if key == keyboard.Key.f8:
+            self.root.after(0, lambda: self.capture_calibration_point()); return
+
+        if (key == keyboard.Key.insert and
+                any(_pynput_matches(pk,"ctrl") for pk in self.pressed_keys)):
+            self.root.after(0, lambda: self.start_four()); return
+
+        combo = self.cfg.get("pick_hotkey",["end"])
+        if combo:
+            all_pressed = all(
+                any(_pynput_matches(pk,ks) for pk in self.pressed_keys)
+                for ks in combo)
+            if all_pressed and not self.pick_hotkey_armed:
+                self.pick_hotkey_armed = True
+                self.root.after(0, lambda: self.start_pick_macro())
+
+        if (keyboard.Key.page_up in self.pressed_keys) and (keyboard.Key.page_down in self.pressed_keys):
+            if not self.kill_combo_armed:
+                self.kill_combo_armed = True
+                self.root.after(0, lambda: self.kill_games())
+
+    def _on_global_key_release(self, key):
+        if key in self.pressed_keys:
+            self.pressed_keys.remove(key)
+        combo = self.cfg.get("pick_hotkey",["end"])
+        if self.pick_hotkey_armed:
+            still_all = all(
+                any(_pynput_matches(pk,ks) for pk in self.pressed_keys)
+                for ks in combo)
+            if not still_all:
+                self.pick_hotkey_armed = False
+        if key in (keyboard.Key.page_up, keyboard.Key.page_down):
+            if (keyboard.Key.page_up not in self.pressed_keys) or (keyboard.Key.page_down not in self.pressed_keys):
+                self.kill_combo_armed = False
+
+    # ──────────────────────────────────────────────────────────────────
+    # Auto Keys
+    # ──────────────────────────────────────────────────────────────────
+    def start_enter(self):
+        if self.enter_thread and self.enter_thread.is_alive():
+            self.status_var.set("ENTER laeuft bereits."); return
+        self.stop_enter.clear()
+        self.enter_thread = threading.Thread(target=self._enter_loop, daemon=True)
+        self.enter_thread.start()
+        self.status_var.set("ENTER Auto gestartet (alle 5s).")
+
+    def start_four(self):
+        if self.four_thread and self.four_thread.is_alive():
+            self.status_var.set("Taste 4 laeuft bereits."); return
+        self.stop_four.clear()
+        self.four_thread = threading.Thread(target=self._four_loop, daemon=True)
+        self.four_thread.start()
+        self.status_var.set("Taste 4 Auto gestartet (alle 5s).")
+
+    def stop_all_macros(self):
+        self.stop_enter.set()
+        self.stop_four.set()
+        self.stop_pick.set()
+        self.status_var.set("BACKSPACE: Alle Macros gestoppt.")
+
+    def _enter_loop(self):
+        try:
+            while not self.stop_enter.is_set():
+                pyautogui.press("enter")
+                self._sleep_interruptible(self.stop_enter, 5.0)
+        except pyautogui.FailSafeException:
+            self.stop_enter.set()
+            self.root.after(0, lambda: self.status_var.set("Failsafe: ENTER Loop gestoppt."))
+
+    def _four_loop(self):
+        try:
+            while not self.stop_four.is_set():
+                pyautogui.press("4")
+                self._sleep_interruptible(self.stop_four, 5.0)
+        except pyautogui.FailSafeException:
+            self.stop_four.set()
+            self.root.after(0, lambda: self.status_var.set("Failsafe: 4-Loop gestoppt."))
+
+    def _sleep_interruptible(self, evt: threading.Event, seconds: float):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end and not evt.is_set():
+            time.sleep(0.05)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Pick Macro
+    # ──────────────────────────────────────────────────────────────────
+    def start_pick_macro(self):
+        if not self.selected_heroes:
+            self.status_var.set("Keine Helden ausgewaehlt."); return
+        if self.pick_thread and self.pick_thread.is_alive():
+            self.status_var.set("Pick-Macro laeuft bereits."); return
+
+        mode      = self.cfg.get("pick_mode", "both")
+        has_images= FIELD_TEMPLATE_PATH.exists() and PICK_TEMPLATE_PATH.exists() and CV2_AVAILABLE
+        has_coords= (isinstance(self.cfg.get("pick_points"), list) and
+                     len(self.cfg.get("pick_points", [])) == 3 and
+                     isinstance(self.cfg.get("field_point"), list) and
+                     len(self.cfg.get("field_point", [])) == 2)
+
+        if mode == "image"  and not has_images:
+            self.status_var.set("Modus '📷 Bild': Templates fehlen → Konfiguration > Bild-Templates."); return
+        if mode == "coords" and not has_coords:
+            self.status_var.set("Modus '📍 Koordinaten': nicht kalibriert → Konfiguration > Koordinaten."); return
+        if mode == "both"   and not has_images and not has_coords:
+            self.status_var.set("Bitte zuerst kalibrieren → Tab Konfiguration."); return
+
+        mode_labels = {"image":"📷 Bild", "coords":"📍 Koordinaten", "both":"🔀 Beides"}
+        # ENTER-Loop stoppen — Pick-Macro übernimmt ab jetzt
+        self.stop_enter.set()
+        self.stop_pick.clear()
+        self.pick_thread = threading.Thread(target=self._pick_macro_loop, daemon=True)
+        self.pick_thread.start()
+        self.status_var.set(f"Pick-Macro gestartet  [{mode_labels.get(mode, mode)}].")
+
+    def stop_pick_macro(self):
+        self.stop_pick.set()
+        self.status_var.set("Pick-Macro gestoppt.")
+
+    def _pick_macro_loop(self):
+        """
+        Phase A — einmalig:
+          1. Warten bis field.png erscheint → 2x klicken → 2s warten
+             (NUR Bilderkennung, kein Koordinaten-Fallback)
+
+        Phase B — einmal durch alle Helden:
+          2. Heldennamen eintippen → ENTER → 1s warten
+          3. Auswählen suchen & klicken
+          4. 2-3 Sekunden warten bis Fenster geladen
+          5. PLANUNG prüfen:
+             - gefunden → sofort Phase C
+             - nicht gefunden → nächster Held
+
+        Phase C — Items kaufen (wenn aktiviert):
+          6. Rechtsklick auf jedes Item im aktiven Set
+        """
+        try:
+            heroes    = list(self.selected_heroes)
+            pick_mode = self.cfg.get("pick_mode", "both")
+            use_img   = (pick_mode in ("image", "both")) and CV2_AVAILABLE
+
+            def _t(k, d):
+                try:    return float(self.cfg.get("timings", {}).get(k, d))
+                except: return float(d)
+
+            # ── Phase A ───────────────────────────────────────────────
+            self.root.after(0, lambda: self.status_var.set(
+                "Pick: Warte auf Suchfeld...  |  BACKSPACE = Stop"))
+
+            if use_img and FIELD_TEMPLATE_PATH.exists():
+                # Nur Bilderkennung — kein Koordinaten-Fallback
+                while not self.stop_pick.is_set():
+                    found = self._find_on_screen(FIELD_TEMPLATE_PATH, confidence=0.65)
+                    if found:
+                        fx, fy = found
+                        break
+                    time.sleep(0.3)
+            else:
+                self.root.after(0, lambda: self.status_var.set(
+                    "⚠ Kein Suchfeld-Template — bitte 📷 Bilder kalibrieren."))
+                self.stop_pick.set()
+
+            if self.stop_pick.is_set():
+                self.root.after(0, lambda: self.status_var.set("Pick-Macro gestoppt."))
+                return
+
+            self.root.after(0, lambda: self.status_var.set(
+                "Pick: Suchfeld gefunden — klicke 2x"))
+            fd = _t("field_click_delay", 0.15)
+            pyautogui.moveTo(fx, fy, duration=0.10)
+            pyautogui.click(); time.sleep(fd); pyautogui.click()
+
+            self.root.after(0, lambda: self.status_var.set(
+                "Pick: Suchfeld aktiviert — warte 2s..."))
+            self._sleep_interruptible(self.stop_pick, 2.0)
+            if self.stop_pick.is_set():
+                self.root.after(0, lambda: self.status_var.set("Pick-Macro gestoppt."))
+                return
+
+            # ── Phase B — einmal durch alle Helden ────────────────────
+            planung_detected = False
+            for hero_num, hero in enumerate(heroes, 1):
+                if self.stop_pick.is_set(): break
+
+                type_duration = _t("type_duration",        4.0)
+                pick_duration = _t("pick_duration",        2.0)
+                pick_interval = _t("pick_click_interval",  0.05)
+                planung_wait  = _t("suchfeld_wait",        2.5)   # Wartezeit nach Klick
+
+                self.root.after(0, lambda h=hero, n=hero_num, total=len(heroes):
+                    self.status_var.set(
+                        f"Pick {n}/{total}: tippe '{h}'  |  BACKSPACE = Stop"))
+
+                # Tippen
+                ti = (type_duration / max(len(hero), 1)) * 0.55
+                ti = max(0.05, min(ti, 0.4))
+                pyautogui.write(hero, interval=ti)
+                rem = type_duration - ti * len(hero)
+                if rem > 0: self._sleep_interruptible(self.stop_pick, rem)
+                if self.stop_pick.is_set(): break
+
+                # ENTER + 1s warten
+                pyautogui.press("enter")
+                self._sleep_interruptible(self.stop_pick, 1.0)
+                if self.stop_pick.is_set(): break
+
+                # Auswählen suchen & klicken
+                self.root.after(0, lambda: self.status_var.set(
+                    "Pick: suche 'Auswählen'..."))
+
+                if use_img and AUSWAHL_TEMPLATE_PATH.exists():
+                    deadline  = time.monotonic() + pick_duration
+                    found_auw = None
+                    while time.monotonic() < deadline and not self.stop_pick.is_set():
+                        found_auw = self._find_on_screen(AUSWAHL_TEMPLATE_PATH, confidence=0.65)
+                        if found_auw: break
+                        time.sleep(0.12)
+
+                    if found_auw:
+                        ax, ay = found_auw
+                        self.root.after(0, lambda: self.status_var.set(
+                            "Pick: ✔ Auswählen gefunden — klicke"))
+                        # Mehrfach klicken für pick_duration Sekunden → Held bestätigen
+                        phase_end = time.monotonic() + pick_duration
+                        ci = 0
+                        while time.monotonic() < phase_end and not self.stop_pick.is_set():
+                            pyautogui.moveTo(ax + (ci % 3 - 1) * 8, ay, duration=0.04)
+                            pyautogui.click()
+                            ci += 1
+                            time.sleep(pick_interval)
+                    else:
+                        self.root.after(0, lambda: self.status_var.set(
+                            "⚠ Auswählen nicht gefunden — überspringe Held"))
+                        continue   # Held überspringen, nächster
+
+                if self.stop_pick.is_set(): break
+
+                # 2-3 Sekunden warten bis Fenster geladen ist
+                self.root.after(0, lambda: self.status_var.set(
+                    "Pick: warte auf Planung-Bildschirm..."))
+                self._sleep_interruptible(self.stop_pick, planung_wait)
+                if self.stop_pick.is_set(): break
+
+                # PLANUNG prüfen
+                if use_img and PLANUNG_TEMPLATE_PATH.exists():
+                    pos_planung = self._find_on_screen(PLANUNG_TEMPLATE_PATH, confidence=0.60)
+                    if pos_planung:
+                        self.root.after(0, lambda: self.status_var.set(
+                            "✔ PLANUNG erkannt — springe zu Phase C!"))
+                        planung_detected = True
+                        break
+                    else:
+                        self.root.after(0, lambda h=hero: self.status_var.set(
+                            f"PLANUNG nicht gefunden nach '{h}' — nächster Held"))
+                        # Kein break → nächster Held
+                else:
+                    # Kein PLANUNG-Template → nach letztem Helden direkt Phase C
+                    if hero_num == len(heroes):
+                        planung_detected = True
+
+            if self.stop_pick.is_set():
+                self.root.after(0, lambda: self.status_var.set("Pick-Macro gestoppt."))
+                return
+
+            # ── Phase C — Items kaufen ─────────────────────────────────
+            if not self.cfg.get("item_phase_enabled", True):
+                self.root.after(0, lambda: self.status_var.set(
+                    "✔ Pick fertig. Item-Phase deaktiviert."))
+                return
+
+            if not planung_detected:
+                self.root.after(0, lambda: self.status_var.set(
+                    "✔ Pick fertig — PLANUNG nicht erkannt, keine Items."))
+                return
+
+            self.root.after(0, lambda: self.status_var.set(
+                "Phase C: PLANUNG erkannt — kaufe Items..."))
+            time.sleep(0.5)
+
+            active_idx = self.cfg.get("active_item_set", 0)
+            item_sets  = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
+            active_set = item_sets[active_idx] if active_idx < len(item_sets) else item_sets[0]
+            items      = active_set.get("items", [])
+
+            for i, item_entry in enumerate(items):
+                if self.stop_pick.is_set(): break
+                item_file = item_entry.get("file", f"gterminal_{active_idx+1}_{i+1}.png")
+                item_label= item_entry.get("label", f"Item {i+1}")
+                item_path = _BASE_DIR / item_file
+
+                if not item_path.exists():
+                    continue  # Kein Template → überspringen
+
+                self.root.after(0, lambda lbl=item_label, n=i+1: self.status_var.set(
+                    f"Phase C: suche {n}/6 — {lbl}"))
+
+                # Item suchen
+                item_pos = None
+                if use_img:
+                    deadline = time.monotonic() + 3.0
+                    while time.monotonic() < deadline and not self.stop_pick.is_set():
+                        item_pos = self._find_on_screen(item_path, confidence=0.65)
+                        if item_pos: break
+                        time.sleep(0.2)
+
+                if item_pos:
+                    ix, iy = item_pos
+                    pyautogui.moveTo(ix, iy, duration=0.08)
+                    pyautogui.click(button="right")   # RECHTSKLICK kauft
+                    self.root.after(0, lambda lbl=item_label: self.status_var.set(
+                        f"Phase C: ✔ {lbl} gekauft (Rechtsklick)"))
+                    time.sleep(0.3)
+                else:
+                    self.root.after(0, lambda lbl=item_label: self.status_var.set(
+                        f"Phase C: ⚠ {lbl} nicht gefunden — übersprungen"))
+                    time.sleep(0.1)
+
+            if not self.stop_pick.is_set():
+                self.root.after(0, lambda: self.status_var.set(
+                    "✔ Pick & Items fertig — ins Spiel!"))
+
+        except pyautogui.FailSafeException:
+            self.stop_pick.set()
+            self.root.after(0, lambda: self.status_var.set(
+                "Failsafe: Pick-Macro gestoppt (Maus links-oben)."))
+
+    # ──────────────────────────────────────────────────────────────────
+    # Kalibrierung (Koordinaten)
+    # ──────────────────────────────────────────────────────────────────
+    def start_calibration(self):
+        self.calibrating = True
+        with self.calib_lock:
+            self.calib_points = []
+        self.status_var.set("Kalib 1/4: Maus aufs HELDEN-SUCHFELD hovern, dann F8.")
+
+    def capture_calibration_point(self):
+        if not self.calibrating:
+            self.status_var.set("Kalibrierung nicht aktiv."); return
+        pos = pyautogui.position()
+        with self.calib_lock:
+            self.calib_points.append((pos.x, pos.y))
+            n = len(self.calib_points)
+        hints = {1:"Kalib 2/4: PICK-BUTTON Pos.1, dann F8.",
+                 2:"Kalib 3/4: PICK-BUTTON Pos.2, dann F8.",
+                 3:"Kalib 4/4: PICK-BUTTON Pos.3, dann F8."}
+        if n < 4:
+            self.status_var.set(f"Punkt {n}/4 gespeichert ({pos.x},{pos.y}).  " + hints.get(n,""))
+            return
+        with self.calib_lock:
+            pts = self.calib_points[:4]; self.calib_points = []
+        self.cfg["field_point"]  = list(pts[0])
+        self.cfg["pick_points"]  = [list(p) for p in pts[1:4]]
+        save_config(self.cfg)
+        self.calibrating = False
+        self.status_var.set(f"Kalibrierung fertig.  Feld={pts[0]}  Pick={self.cfg['pick_points']}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Feld-Klick
+    # ──────────────────────────────────────────────────────────────────
+    def click_hero_field(self):
+        fp = self.cfg.get("field_point",[])
+        if not (isinstance(fp,list) and len(fp)==2):
+            self.status_var.set("Feld-Punkt fehlt – bitte kalibrieren."); return
+        def _do():
+            try:
+                fx, fy = fp
+                pyautogui.moveTo(fx, fy, duration=0.1)
+                pyautogui.click(); time.sleep(0.15); pyautogui.click()
+                self.root.after(0, lambda: self.status_var.set(f"Feld angeklickt (2x) bei ({fx},{fy})."))
+            except pyautogui.FailSafeException:
+                self.root.after(0, lambda: self.status_var.set("Failsafe: Feld-Klick gestoppt."))
+        threading.Thread(target=_do, daemon=True).start()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Apps
+    # ──────────────────────────────────────────────────────────────────
+    def kill_steam(self):
+        self.stop_all_macros()
+        k = kill_processes_by_name({n.lower() for n in STEAM_PROCS})
+        self.status_var.set(f"Steam gekillt: {', '.join(sorted(set(k)))}" if k else "Steam: nichts gefunden.")
+
+    def kill_discord(self):
+        self.stop_all_macros()
+        k = kill_processes_by_name({n.lower() for n in DISCORD_PROCS})
+        self.status_var.set(f"Discord gekillt: {', '.join(sorted(set(k)))}" if k else "Discord: nichts gefunden.")
+
+    def kill_games(self):
+        self.stop_all_macros()
+        k = kill_processes_by_name({n.lower() for n in GAME_PROCS})
+        self.status_var.set(f"Games gekillt: {', '.join(sorted(set(k)))}" if k else "Games: nichts gefunden.")
+
+    def ui_start_steam(self):
+        self.status_var.set("Steam gestartet." if start_steam() else "Steam Start fehlgeschlagen.")
+
+    def ui_start_discord(self):
+        self.status_var.set("Discord gestartet." if start_discord() else "Discord Start fehlgeschlagen.")
+
+    def ui_open_discord_voice_video(self):
+        open_discord_voice_video()
+        self.status_var.set("Voice & Video geoeffnet.")
+
+    def ui_open_d2_settings_folder(self):
+        ok = open_folder(D2_SETTINGS_PATH)
+        self.status_var.set("D2 Settings geoeffnet." if ok else f"Ordner nicht gefunden: {D2_SETTINGS_PATH}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Auflösung wechseln
+    # ──────────────────────────────────────────────────────────────────
+    def _res_current_str(self) -> str:
+        try:
+            w, h, hz = _get_current_resolution()
+            return f"{w} × {h}  @  {hz} Hz"
+        except Exception:
+            return "unbekannt"
+
+    def _set_res(self, w: int, h: int, hz: int):
+        self.status_var.set(f"Ändere Auflösung auf {w}×{h} @ {hz}Hz ...")
+
+        def _do():
+            ok = _apply_resolution(w, h, hz)
+            def _update():
+                if ok:
+                    self.status_var.set(f"✔  Auflösung: {w}×{h} @ {hz}Hz gesetzt.")
+                else:
+                    self.status_var.set(f"✗  Auflösung {w}×{h} @ {hz}Hz fehlgeschlagen.")
+                try:
+                    self._res_status.config(text=self._res_current_str())
+                except Exception:
+                    pass
+            self.root.after(0, _update)
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Globaler Speichern-Button
+    # ──────────────────────────────────────────────────────────────────
+    def save_all_settings(self):
+        """Speichert die gesamte aktuelle Config in die JSON-Datei."""
+        try:
+            save_config(self.cfg)
+            self.status_var.set(f"✔ Alle Einstellungen gespeichert  →  {CONFIG_PATH.name}")
+        except Exception as e:
+            self.status_var.set(f"✗ Fehler beim Speichern: {e}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Close
+    # ──────────────────────────────────────────────────────────────────
+    def _auto_close_check(self):
+        """Alle 30s prüfen ob ein Spiel läuft.
+        Wenn 3 Minuten kein Spiel erkannt → automatisch schließen."""
+        AUTO_CLOSE_SECONDS = 180
+        try:
+            game_names = {n.lower() for n in GAME_PROCS}
+            running = any(
+                (proc.info["name"] or "").lower() in game_names
+                for proc in psutil.process_iter(["name"])
+            )
+        except Exception:
+            running = False
+
+        if running:
+            self._last_game_seen = time.time()
+        else:
+            if time.time() - self._last_game_seen >= AUTO_CLOSE_SECONDS:
+                self.on_close()
+                return
+
+        self.root.after(30_000, self._auto_close_check)
+
+    def on_close(self):
+        self.stop_all_macros()
+        try: self.kb_listener.stop()
+        except Exception: pass
+        self.root.destroy()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────────────────────
+def main():
+    root = tk.Tk()
+
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Gterminal.App.1.0")
+    except Exception:
+        pass
+
+    _apply_icon(root)
+
+    # Alle Toplevel-Fenster ebenfalls mit Icon
+    _orig_init = tk.Toplevel.__init__
+    def _patched_init(self, master=None, **kw):
+        _orig_init(self, master, **kw)
+        try: _apply_icon(self)
+        except Exception: pass
+    tk.Toplevel.__init__ = _patched_init
+
+    GterminalApp(root)
+
+    root.resizable(True, True)
+    root.minsize(470, 500)
+    root.update_idletasks()
+    # Breite fix 470, Höhe passt sich dem Inhalt an
+    root.geometry(f"470x{root.winfo_reqheight()}")
+
+    def _front():
+        try: root.attributes("-topmost", True)
+        except Exception: pass
+        root.lift()
+        try: root.focus_force()
+        except Exception: pass
+        root.after(1200, lambda: root.attributes("-topmost", False))
+
+    root.after(50, _front)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
