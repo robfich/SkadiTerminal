@@ -215,7 +215,7 @@ def set_game_procs(games) -> None:
     GAME_PROCS.clear()
     GAME_PROCS.update(g.strip().lower() for g in games if g and g.strip())
 DISCORD_PROCS = {"discord.exe", "discordcanary.exe", "discordptb.exe"}
-D2_SETTINGS_PATH = r"G:\Meine Ablage\D2 Setting"
+D2_SETTINGS_PATH = str((_GDRIVE or Path(r"G:\Meine Ablage")) / "D2 Setting")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # KOMPLETTE HELDEN-LISTE  (Dota 2 Stand 2025)
