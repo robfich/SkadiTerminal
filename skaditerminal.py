@@ -217,6 +217,11 @@ def item_icon_path(key: str) -> Path:
 def item_match_path(key: str) -> Path:
     return ITEMS_DIR / "match" / f"{key}.png"
 
+HERO_ICON_DIR = ITEMS_DIR / "heroes"     # Minimap-Icons (32×32) je Heldenkürzel
+
+def hero_icon_path(code: str) -> Path:
+    return HERO_ICON_DIR / f"{code}.png"
+
 def item_label(key: str) -> str:
     return ITEM_BY_KEY.get(key, {}).get("label", key)
 
@@ -897,6 +902,8 @@ class SkadiTerminalApp:
         # Letzte Auswahl wiederherstellen (wird bei jeder Änderung gespeichert)
         self.selected_heroes: list[str] = list(self.cfg.get("last_selection", []))[:8]
         self.hero_buttons:    dict[str, tk.Button] = {}
+        self._hero_imgs:      dict[tuple[str, int], tk.PhotoImage] = {}
+        self._tip_win = None
         self.pressed_keys     = set()
         self.kill_combo_armed = False
         self.close_apps_armed = False
@@ -1496,12 +1503,66 @@ class SkadiTerminalApp:
     # ──────────────────────────────────────────────────────────────────
     # Hero Grid
     # ──────────────────────────────────────────────────────────────────
+    def _hero_cols(self) -> int:
+        """5 Spalten, bei großer Schrift 4 (damit Icon + Kürzel reinpassen)."""
+        return HERO_COLS - 1 if self._font_large else HERO_COLS
+
+    def _hero_img(self, code: str) -> tk.PhotoImage:
+        """Minimap-Icon des Helden (24 px); ohne Bild ein leerer Platzhalter gleicher Größe."""
+        size = 24
+        key = (code, size)
+        if key not in self._hero_imgs:
+            img = None
+            p = hero_icon_path(code)
+            if p.exists():
+                try:
+                    img = tk.PhotoImage(file=str(p))
+                    img = img.zoom(3).subsample(4)        # 32 → 24 px
+                except tk.TclError:
+                    img = None
+            self._hero_imgs[key] = img or tk.PhotoImage(width=size, height=size)
+        return self._hero_imgs[key]
+
+    def _tooltip(self, widget, text: str):
+        """Kleiner Hinweis (z. B. voller Heldenname) beim Überfahren mit der Maus."""
+        def _show(e):
+            _hide(None)
+            tip = tk.Toplevel(widget)
+            tip.overrideredirect(True)
+            try:
+                tip.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            tk.Label(tip, text=text, bg=PAL["surface2"], fg=PAL["text"], font=self._fonts["small"],
+                     padx=6, pady=2, highlightthickness=1,
+                     highlightbackground=PAL["separator"]).pack()
+            tip.geometry(f"+{e.x_root + 12}+{e.y_root + 14}")
+            self._tip_win = tip
+
+        def _hide(_e):
+            if self._tip_win is not None:
+                try:
+                    self._tip_win.destroy()
+                except tk.TclError:
+                    pass
+                self._tip_win = None
+
+        widget.bind("<Enter>", lambda e: widget.after(350, lambda: _show(e)
+                                                       if widget.winfo_containing(e.x_root, e.y_root) is widget
+                                                       else None), add="+")
+        widget.bind("<Leave>", _hide, add="+")
+        widget.bind("<ButtonPress>", _hide, add="+")
+
     def _rebuild_hero_grid(self):
         for w in self.hero_frame.winfo_children():
             w.destroy()
         self.hero_buttons.clear()
         self._hero_color: dict[str, str] = {}
 
+        cols        = self._hero_cols()
+        for c in range(HERO_COLS):
+            self.hero_frame.columnconfigure(c, weight=1 if c < cols else 0,
+                                            uniform="hero" if c < cols else "")
         heroes      = _build_heroes(self.cfg.get("hero_pool",[]), self.cfg.get("custom_heroes",[]))
         current_row = 0
 
@@ -1512,23 +1573,25 @@ class SkadiTerminalApp:
             color = ATTR_COLORS[attr]
             tk.Label(self.hero_frame, text=f"■ {ATTR_DE[attr].upper()}",
                      bg=PAL["surface"], fg=color, font=self._fonts["section"], anchor="w"
-                     ).grid(row=current_row, column=0, columnspan=HERO_COLS, sticky="ew",
+                     ).grid(row=current_row, column=0, columnspan=cols, sticky="ew",
                             pady=(0 if current_row == 0 else 6, 2))
             current_row += 1
 
             for i, (code, name) in enumerate(attr_heroes):
-                btn = tk.Button(self.hero_frame, text=code,
+                btn = tk.Button(self.hero_frame, text=code, image=self._hero_img(code),
+                                compound="left", anchor="w",
                                 command=lambda k=code: self.toggle_hero(k),
                                 activebackground=color, activeforeground=PAL["on_accent"],
                                 relief="flat", bd=0, cursor="hand2",
-                                padx=2, pady=3, highlightthickness=0)
-                btn.grid(row=current_row + i // HERO_COLS, column=i % HERO_COLS,
+                                padx=3, pady=1, highlightthickness=0)
+                self._tooltip(btn, name)
+                btn.grid(row=current_row + i // cols, column=i % cols,
                          sticky="ew", padx=1, pady=1)
                 btn.bind("<Button-3>", lambda e, k=code: self._hero_context_menu(e, k))
                 self.hero_buttons[code] = btn
                 self._hero_color[code] = color
 
-            current_row += (len(attr_heroes) + HERO_COLS - 1) // HERO_COLS
+            current_row += (len(attr_heroes) + cols - 1) // cols
 
         for code in list(self.selected_heroes):
             if code not in self.hero_buttons:
