@@ -35,6 +35,11 @@ Phase D erkennt den Doppel-Pick über
 1. das optionale Template `skadi_doppelt.png` (Konfiguration → Bild-Templates → Karte 4), oder
 2. Suchfeld wieder sichtbar **und** PLANUNG verschwunden.
 
+**„Auswählen“ & Auflösung:** Die Bilder werden auch gefunden, wenn das Spiel gestreckt läuft
+(z. B. Dota in 1920×1200 auf einem 2560×1440-Bildschirm). Geklickt wird rechts-unten von der
+Bildmitte, also sicher auf dem Button. Koordinaten (F8) werden nur benutzt, wenn sie wirklich
+kalibriert wurden – die Standardwerte klicken nicht mehr irgendwo ins Heldenraster.
+
 Prüfdauer einstellbar unter *Zeiten & Hotkey → Prüfdauer* (Standard 60 s),
 an/aus über den Button „Doppel-Pick-Check“ im Pick-Tab.
 

@@ -726,6 +726,16 @@ def _apply_resolution(width: int, height: int, hz: int) -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 # Bilderkennung: Template-Cache + Screenshot pro Thread
 # ──────────────────────────────────────────────────────────────────────────────
+def _scale_xy(scale) -> tuple[float, float]:
+    """Skalierung als (sx, sy) — akzeptiert Zahl, Liste oder Tupel."""
+    if isinstance(scale, (list, tuple)):
+        return float(scale[0]), float(scale[1])
+    return float(scale), float(scale)
+
+def _fmt_scale(scale) -> str:
+    sx, sy = _scale_xy(scale)
+    return f"{sx:.2f}" if abs(sx - sy) < 0.005 else f"{sx:.2f}/{sy:.2f}"
+
 class _TemplateCache:
     """
     Lädt Templates einmal (Graustufen) und hält skalierte Varianten vor.
@@ -735,21 +745,23 @@ class _TemplateCache:
         self._cache: dict[tuple[Path, float], tuple[float, object]] = {}
         self._lock = threading.Lock()
 
-    def get(self, path: Path, scale: float = 1.0):
+    def get(self, path: Path, scale=1.0):
+        """scale: Zahl (gleichmäßig) oder (sx, sy) für gestreckte Bilder."""
         try:
             mtime = path.stat().st_mtime
         except OSError:
             return None
-        key = (path, round(scale, 3))
+        sx, sy = _scale_xy(scale)
+        key = (path, round(sx, 3), round(sy, 3))
         with self._lock:
             hit = self._cache.get(key)
         if hit and hit[0] == mtime:
             return hit[1]
         img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-        if img is not None and abs(scale - 1.0) > 0.001:
+        if img is not None and (abs(sx - 1.0) > 0.001 or abs(sy - 1.0) > 0.001):
             h, w = img.shape
-            size = (max(4, round(w * scale)), max(4, round(h * scale)))
-            img = cv2.resize(img, size, interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC)
+            size = (max(4, round(w * sx)), max(4, round(h * sy)))
+            img = cv2.resize(img, size, interpolation=cv2.INTER_AREA if sx * sy < 1 else cv2.INTER_CUBIC)
         with self._lock:
             self._cache[key] = (mtime, img)
         return img
@@ -825,6 +837,7 @@ class SkadiTerminalApp:
         self.calib_lock   = threading.Lock()
         self._last_sweep: dict[Path, float] = {}
         self._last_match  = (0.0, 1.0)
+        self._last_box    = (0, 0, 0, 0)     # Treffer-Rechteck (x, y, w, h) der letzten Suche
         self.status_var   = tk.StringVar(value=f"Bereit.  Config: {CONFIG_PATH.name}")
         self.theme_btn = None
         self.font_btn  = None
@@ -2509,9 +2522,9 @@ class SkadiTerminalApp:
                         th, tw = tmpl.shape
                         x0, y0 = pos[0] - tw // 2, pos[1] - th // 2
                         cv2.rectangle(debug_img, (x0, y0), (x0 + tw, y0 + th), (0, 255, 0), 3)
-                        cv2.putText(debug_img, f"{label} {mv:.2f} x{sc:.2f}", (x0, y0 - 8),
+                        cv2.putText(debug_img, f"{label} {mv:.2f} x{_fmt_scale(sc)}", (x0, y0 - 8),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                        results.append(f"{label}: ✔ {mv:.2f} ×{sc:.2f}")
+                        results.append(f"{label}: ✔ {mv:.2f} ×{_fmt_scale(sc)}")
                     else:
                         results.append(f"{label}: ✗ {mv:.2f}")
 
@@ -2544,29 +2557,38 @@ class SkadiTerminalApp:
     # Feste Skalierungen, die zusätzlich probiert werden (gängige Auflösungswechsel)
     _SCALE_SWEEP = (1.0, 0.75, 1.3333, 0.9, 1.1111, 0.8, 1.25, 1.2, 0.8333, 1.125, 0.6667, 1.5)
 
-    def _scale_candidates(self, template_path: Path, sw: int, sh: int) -> tuple[float | None, list[float]]:
+    def _scale_candidates(self, template_path: Path, sw: int, sh: int):
         """
         (gelernte Skalierung, Kandidatenliste) für dieses Template bei Bildschirm sw×sh.
-        Basis: Bildschirmhöhe jetzt / Bildschirmhöhe bei der Aufnahme (Dota skaliert
-        die Oberfläche mit der Höhe). Unbekannte Aufnahme-Auflösung = Spielauflösung aus der Config.
+        Jede Skalierung ist ein Paar (sx, sy):
+          • gleichmäßig nach Bildschirmhöhe (Dota skaliert die Oberfläche mit der Höhe;
+            passt auch bei schwarzen Rändern links/rechts)
+          • gestreckt auf den ganzen Bildschirm (z. B. Spiel 1920×1200 auf 2560×1440)
+        Unbekannte Aufnahme-Auflösung = Spielauflösung aus der Config.
         """
         learned = self.cfg.get("learned_scales", {}).get(f"{sw}x{sh}", {}).get(template_path.name)
+        learned = _scale_xy(learned) if learned else None
         cap = load_template_meta().get(template_path.name) or self.cfg.get("game_res", [1920, 1200])
-        base = sh / max(1, cap[1])
-        cands = ([learned] if learned else []) + [base] + [base * f for f in (0.97, 1.03, 0.94, 1.06)]
-        cands += list(self._SCALE_SWEEP)
+        u  = sh / max(1, cap[1])
+        sx = sw / max(1, cap[0])
+        cands = ([learned] if learned else []) + [(u, u), (sx, u)]
+        cands += [(u * f, u * f) for f in (0.97, 1.03, 0.94, 1.06)]
+        cands += [(sx * f, u * f) for f in (0.97, 1.03)]
+        cands += [(c, c) for c in self._SCALE_SWEEP]
         seen, out = set(), []
         for c in cands:
-            k = round(c, 3)
-            if 0.4 <= k <= 2.5 and k not in seen:
+            k = (round(c[0], 3), round(c[1], 3))
+            if all(0.4 <= v <= 2.5 for v in k) and k not in seen:
                 seen.add(k)
                 out.append(c)
         return learned, out
 
-    def _remember_scale(self, template_path: Path, sw: int, sh: int, scale: float):
+    def _remember_scale(self, template_path: Path, sw: int, sh: int, scale):
         per_res = self.cfg.setdefault("learned_scales", {}).setdefault(f"{sw}x{sh}", {})
-        if per_res.get(template_path.name) != round(scale, 4):
-            per_res[template_path.name] = round(scale, 4)
+        sx, sy = _scale_xy(scale)
+        val = round(sx, 4) if abs(sx - sy) < 0.0005 else [round(sx, 4), round(sy, 4)]
+        if per_res.get(template_path.name) != val:
+            per_res[template_path.name] = val
             try:
                 save_config(self.cfg)
             except Exception:
@@ -2603,11 +2625,11 @@ class SkadiTerminalApp:
                 _, max_val, _, max_loc = cv2.minMaxLoc(result)
                 return (max_val, max_loc, scale, (tw, th))
 
-            best = (-1.0, None, 1.0, (0, 0))
+            best = (-1.0, None, (1.0, 1.0), (0, 0))
             cap = load_template_meta().get(template_path.name)
             if cap and (sw, sh) == tuple(cap):
                 # Gleiche Auflösung wie bei der Aufnahme → 1:1 wie früher, nichts raten
-                best = _match(1.0) or best
+                best = _match((1.0, 1.0)) or best
             else:
                 # Mit gelernter Skalierung nur diese probieren; volle Suche höchstens alle 3 s
                 now = time.monotonic()
@@ -2629,12 +2651,13 @@ class SkadiTerminalApp:
             self._last_match = (score, scale)
             if report:
                 self._ui_status(
-                    f"Match {template_path.name}: {score:.2f} (×{scale:.2f})  "
+                    f"Match {template_path.name}: {score:.2f} (×{_fmt_scale(scale)})  "
                     f"{'✔' if score >= confidence else f'✗ zu niedrig (min {confidence})'}")
             if loc is not None and score >= confidence:
                 # Nur eindeutige Treffer merken — sonst lernt er eine falsche Größe
                 if scale != learned and score >= 0.80:
                     self._remember_scale(template_path, sw, sh, scale)
+                self._last_box = (loc[0], loc[1], tw, th)
                 return (loc[0] + tw // 2, loc[1] + th // 2)
         except Exception as e:
             self._ui_status(f"Bilderkennung Fehler: {e}")
@@ -2957,10 +2980,14 @@ class SkadiTerminalApp:
             return (int(pt[0]), int(pt[1]))
 
     def _has_coords(self) -> bool:
+        """Nur selbst kalibrierte Punkte zählen — die Standardwerte treffen nichts."""
         pp = self.cfg.get("pick_points")
         fp = self.cfg.get("field_point")
-        return (isinstance(pp, list) and len(pp) == 3 and
-                isinstance(fp, list) and len(fp) == 2)
+        if not (isinstance(pp, list) and len(pp) == 3 and
+                isinstance(fp, list) and len(fp) == 2):
+            return False
+        return bool(self.cfg.get("coords_res")) or (
+            pp != DEFAULT_CONFIG["pick_points"] or fp != DEFAULT_CONFIG["field_point"])
 
     def start_pick_macro(self):
         if not self.selected_heroes:
@@ -3093,8 +3120,13 @@ class SkadiTerminalApp:
         if use_img and AUSWAHL_TEMPLATE_PATH.exists():
             pos = self._wait_for(AUSWAHL_TEMPLATE_PATH, 0.65, timeout)
             if pos:
-                ax, ay = pos
-                return [(ax - 8, ay), (ax, ay), (ax + 8, ay)]
+                # Nicht die Bildmitte klicken, sondern rechts-unten davon: Das Template
+                # wird oft mit der Maus am linken Button-Rand aufgenommen — dann liegt
+                # die Mitte genau auf der Kante. Rechts davon ist sicher der Button.
+                x0, y0, tw, th = self._last_box
+                ax, ay = round(x0 + tw * 0.72), round(y0 + th * 0.58)
+                d = max(4, round(tw * 0.05))
+                return [(ax, ay), (ax + d, ay), (ax - d, ay + d // 2)]
         if use_coords:
             return [self._scale_pt(p) for p in self.cfg["pick_points"]]
         return None
