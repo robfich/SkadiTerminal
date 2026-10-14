@@ -28,7 +28,8 @@ Vom Wächter gestartet schließt sich SkadiTerminal 3 Minuten nach Spielende sel
 | Phase | Was passiert |
 |---|---|
 | **A** | Wartet auf das Helden-Suchfeld (Bild) bzw. nutzt die kalibrierten Koordinaten und klickt 2x |
-| **B** | Tippt die Helden der Reihe nach, ENTER, klickt „Auswählen“, wartet auf PLANUNG |
+| **B** | Tippt die Helden der Reihe nach, ENTER, klickt „Auswählen“, wartet auf PLANUNG oder den Item-Shop |
+| **C** | Kauft die **Startitems des gepickten Helden** per Rechtsklick im Shop (siehe unten) |
 | **D** | **Doppel-Pick-Check:** Haben du und das Gegnerteam denselben Helden genommen, wird neu gepickt – mit dem nächsten Helden aus deiner Liste |
 
 Phase D erkennt den Doppel-Pick über
@@ -42,6 +43,30 @@ kalibriert wurden – die Standardwerte klicken nicht mehr irgendwo ins Heldenra
 
 Prüfdauer einstellbar unter *Zeiten & Hotkey → Prüfdauer* (Standard 60 s),
 an/aus über den Button „Doppel-Pick-Check“ im Pick-Tab.
+
+## Startitems pro Held (Drag & Drop)
+
+**Rechtsklick auf einen Helden → „Items hinzufügen …“** öffnet den Item-Editor:
+
+- Items aus dem Shop unten in die Kaufliste ziehen (oder doppelklicken)
+- in der Liste ziehen = Reihenfolge ändern · rausziehen oder Rechtsklick = entfernen
+- Helden mit Items haben im Raster einen Punkt: `wk •`
+
+Nach dem Pick wartet Phase C auf den Shop („Startgegenstände“) und kauft die Liste der Reihe nach per
+Rechtsklick. Gesucht wird in Farbe (Observer/Sentry Ward werden nicht verwechselt), das Inventar links
+wird ignoriert, gestreckte Auflösungen (1920×1200 auf 2560×1440) funktionieren.
+An/aus: Schalter **„Startitems kaufen“** im Pick-Tab.
+
+Die Item-Bilder liegen in `items/` (aus einem Shop-Screenshot in 1920×1200 ausgeschnitten,
+`items/match/` = oberer Teil ohne Lagerzahl für die Suche) und werden in die EXE gepackt.
+Neue Items: Bild nach `items/<key>.png`, oberen Teil nach `items/match/<key>.png`, Eintrag in `items/items.json`.
+
+## Was wird gespeichert?
+
+Alles in `skadi_config.json` im Datenordner (Google Drive) – **sofort bei jeder Änderung**, nicht erst beim
+Beenden: Auswahl (wird beim nächsten Start wiederhergestellt), Presets, Startitems pro Held, Schalter,
+Zeiten, Spiele-Liste. Gespeichert wird über eine Hilfsdatei, damit die Config auch heil bleibt, wenn das
+Programm mitten im Schreiben beendet wird.
 
 ## Testen
 
@@ -104,6 +129,16 @@ Der Wächter sucht SkadiTerminal in dieser Reihenfolge:
 `Einrichten.bat` doppelklicken: installiert Python 3.12 (per `winget`, ohne Admin; andere Python-Versionen bleiben unberührt und werden ignoriert, weil es für sie nicht immer fertige Pakete gibt) und alle Pakete
 (`pyautogui`, `opencv-python`, `mss`, `pynput`, `pyinstaller`, …) und startet danach auf Wunsch `Aktualisieren.bat`.
 Der Microsoft-Store-Platzhalter für `python` wird erkannt und übergangen.
+
+## Versionen auf GitHub
+
+| Branch | Inhalt |
+|---|---|
+| `main` | stabile Version – holt `Aktualisieren.bat` |
+| `final` | gesicherter Stand 1.0 (vor der Item-Funktion), wird nicht mehr verändert |
+| `workinprogress` | Testversion mit den neuesten Funktionen – holt `Aktualisieren_WIP.bat` |
+
+Zurück zur stabilen Version: einfach wieder `Aktualisieren.bat` starten.
 
 ## Aktualisieren (ein Doppelklick)
 

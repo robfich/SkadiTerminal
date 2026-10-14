@@ -1,0 +1,188 @@
+{
+ "capture_res": [
+  1920,
+  1200
+ ],
+ "items": [
+  {
+   "key": "tango",
+   "label": "Tango",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "healing_salve",
+   "label": "Healing Salve",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "faerie_fire",
+   "label": "Faerie Fire",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "blood_grenade",
+   "label": "Blood Grenade",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "clarity",
+   "label": "Clarity",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "enchanted_mango",
+   "label": "Enchanted Mango",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "tp_scroll",
+   "label": "Town Portal Scroll",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "magic_stick",
+   "label": "Magic Stick",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "observer_ward",
+   "label": "Observer Ward",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "sentry_ward",
+   "label": "Sentry Ward",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "dust",
+   "label": "Dust of Appearance",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "smoke",
+   "label": "Smoke of Deceit",
+   "cat": "Verbrauchsgegenstände"
+  },
+  {
+   "key": "iron_branch",
+   "label": "Iron Branch",
+   "cat": "Attribute"
+  },
+  {
+   "key": "gauntlets",
+   "label": "Gauntlets of Strength",
+   "cat": "Attribute"
+  },
+  {
+   "key": "slippers",
+   "label": "Slippers of Agility",
+   "cat": "Attribute"
+  },
+  {
+   "key": "mantle",
+   "label": "Mantle of Intelligence",
+   "cat": "Attribute"
+  },
+  {
+   "key": "circlet",
+   "label": "Circlet",
+   "cat": "Attribute"
+  },
+  {
+   "key": "belt_strength",
+   "label": "Belt of Strength",
+   "cat": "Attribute"
+  },
+  {
+   "key": "band_elvenskin",
+   "label": "Band of Elvenskin",
+   "cat": "Attribute"
+  },
+  {
+   "key": "robe_magi",
+   "label": "Robe of the Magi",
+   "cat": "Attribute"
+  },
+  {
+   "key": "crown",
+   "label": "Crown",
+   "cat": "Attribute"
+  },
+  {
+   "key": "diadem",
+   "label": "Diadem",
+   "cat": "Attribute"
+  },
+  {
+   "key": "blade_alacrity",
+   "label": "Blade of Alacrity",
+   "cat": "Attribute"
+  },
+  {
+   "key": "staff_wizardry",
+   "label": "Staff of Wizardry",
+   "cat": "Attribute"
+  },
+  {
+   "key": "ring_protection",
+   "label": "Ring of Protection",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "sages_mask",
+   "label": "Sage's Mask",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "ring_regen",
+   "label": "Ring of Regen",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "quelling_blade",
+   "label": "Quelling Blade",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "cloak",
+   "label": "Cloak",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "fluffy_hat",
+   "label": "Fluffy Hat",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "wind_lace",
+   "label": "Wind Lace",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "boots",
+   "label": "Boots of Speed",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "orb_frost",
+   "label": "Orb of Frost",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "blight_stone",
+   "label": "Blight Stone",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "orb_venom",
+   "label": "Orb of Venom",
+   "cat": "Ausrüstung"
+  },
+  {
+   "key": "blades_attack",
+   "label": "Blades of Attack",
+   "cat": "Ausrüstung"
+  }
+ ]
+}

@@ -6,3 +6,9 @@ skadi_config.json
 gterminal_config.json
 debug_*.png
 skadi_debug_match.png
+
+# Laufzeitdaten, falls der Datenordner der Repo-Ordner ist
+/skadi_*.png
+/skadi_*.json
+/skadi_*.tmp
+/debug_*.png

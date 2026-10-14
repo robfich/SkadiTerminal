@@ -51,7 +51,9 @@ pyautogui.FAILSAFE = True
 try:
     import cv2
     import numpy as np
-    import mss as _mss_check   # Verfügbarkeit prüfen
+    import importlib.util
+    if importlib.util.find_spec("mss") is None:   # mss wird erst bei Bedarf geladen
+        raise ImportError("mss fehlt")
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
@@ -189,6 +191,34 @@ ICON_PATH            = next((p for p in (_BASE_DIR / "skaditerminal.ico",
                                          _BUNDLE_DIR / "skaditerminal.ico",
                                          _BASE_DIR / "germinallogo.ico") if p.exists()),
                             _BASE_DIR / "skaditerminal.ico")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Item-Katalog: Bilder der Startgegenstände (items/, in die EXE gepackt)
+#   items/<key>.png        → Anzeige im Item-Editor
+#   items/match/<key>.png  → obere ~55 % des Icons für die Suche (ohne Lagerzahl)
+# ──────────────────────────────────────────────────────────────────────────────
+ITEMS_DIR = next((p for p in (_BUNDLE_DIR / "items", _BASE_DIR / "items")
+                  if (p / "items.json").exists()), _BUNDLE_DIR / "items")
+SHOP_ANCHOR_KEY = "iron_branch"   # steht immer im Shop → „Pick hat geklappt, Shop ist offen“
+
+def _load_item_catalog() -> list[dict]:
+    try:
+        data = json.loads((ITEMS_DIR / "items.json").read_text(encoding="utf-8"))
+        return [d for d in data.get("items", []) if (ITEMS_DIR / f"{d['key']}.png").exists()]
+    except Exception:
+        return []
+
+ITEM_CATALOG = _load_item_catalog()
+ITEM_BY_KEY  = {d["key"]: d for d in ITEM_CATALOG}
+
+def item_icon_path(key: str) -> Path:
+    return ITEMS_DIR / f"{key}.png"
+
+def item_match_path(key: str) -> Path:
+    return ITEMS_DIR / "match" / f"{key}.png"
+
+def item_label(key: str) -> str:
+    return ITEM_BY_KEY.get(key, {}).get("label", key)
 
 def _get_config_path() -> Path:
     return DATA_DIR / f"{_PREFIX}_config.json"
@@ -426,6 +456,9 @@ DEFAULT_CONFIG = {
     "pick_mode":    "both",         # "image" | "coords" | "both"
     "games": list(DEFAULT_GAMES),       # Spiele für Wächter, "Spiele schließen", Auto-Close
     "doppel_check_enabled": True,   # Phase D an/aus
+    "item_buy_enabled":     True,   # Phase C: Startitems des gepickten Helden kaufen
+    "hero_items":           {},     # Held → Liste von Item-Keys (Kaufreihenfolge)
+    "last_selection":       [],     # zuletzt ausgewählte Helden (wird beim Start wiederhergestellt)
 }
 
 def load_config() -> dict:
@@ -459,7 +492,17 @@ def load_config() -> dict:
     return copy.deepcopy(DEFAULT_CONFIG)
 
 def save_config(cfg: dict):
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    """Sicher speichern: erst in eine Hilfsdatei, dann austauschen — so bleibt die Config
+    auch heil, wenn das Programm mitten im Schreiben beendet wird."""
+    text = json.dumps(cfg, indent=2)
+    tmp  = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, CONFIG_PATH)
+    except OSError:                    # z. B. Datei gerade von Google Drive gesperrt
+        CONFIG_PATH.write_text(text, encoding="utf-8")
+        try: tmp.unlink()
+        except OSError: pass
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Prozess-Helpers
@@ -803,6 +846,14 @@ def _grab_screen_gray():
     raw = sct.grab(sct.monitors[1])
     return cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2GRAY)
 
+def _grab_screen_bgr():
+    sct = getattr(_screen_tls, "sct", None)
+    if sct is None:
+        import mss
+        sct = _screen_tls.sct = mss.mss()
+    raw = sct.grab(sct.monitors[1])
+    return cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
+
 def _release_screen():
     sct = getattr(_screen_tls, "sct", None)
     if sct is not None:
@@ -843,7 +894,8 @@ class SkadiTerminalApp:
         self.enter_thread = None
         self.four_thread  = None
         self.pick_thread  = None
-        self.selected_heroes: list[str] = []
+        # Letzte Auswahl wiederherstellen (wird bei jeder Änderung gespeichert)
+        self.selected_heroes: list[str] = list(self.cfg.get("last_selection", []))[:8]
         self.hero_buttons:    dict[str, tk.Button] = {}
         self.pressed_keys     = set()
         self.kill_combo_armed = False
@@ -873,7 +925,7 @@ class SkadiTerminalApp:
 
         # Startup-Preset beim Start automatisch laden
         sp = self.cfg.get("startup_preset", "")
-        if sp and sp in self.cfg.get("presets", {}):
+        if sp and sp in self.cfg.get("presets", {}) and not self.selected_heroes:
             self.root.after(200, lambda: self.load_preset(sp))
 
         # Auto-Close Timer
@@ -981,27 +1033,33 @@ class SkadiTerminalApp:
         self._small_btn(top_row, "✕ leeren", self.clear_selection
                         ).grid(row=0, column=1, sticky="ne", padx=(4, 0))
 
-        # Zeile 1: Doppel-Check-Schalter
+        # Zeile 1: Schalter Startitems + Doppel-Check
         toggle_row = tk.Frame(tab_pick, bg=PAL["surface"])
         toggle_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        toggle_row.columnconfigure(0, weight=1)
+        toggle_row.columnconfigure((0, 1), weight=1, uniform="toggles")
 
-        def _toggle_doppel():
-            self.cfg["doppel_check_enabled"] = not self.cfg.get("doppel_check_enabled", True)
+        def _toggle(key):
+            self.cfg[key] = not self.cfg.get(key, True)
             save_config(self.cfg)
             _update_toggles()
 
-        self._doppel_btn = self._toggle_btn(toggle_row, _toggle_doppel)
-        self._doppel_btn.grid(row=0, column=0, sticky="ew")
+        self._items_btn  = self._toggle_btn(toggle_row, lambda: _toggle("item_buy_enabled"))
+        self._items_btn.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        self._doppel_btn = self._toggle_btn(toggle_row, lambda: _toggle("doppel_check_enabled"))
+        self._doppel_btn.grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        tk.Label(toggle_row, text="Rechtsklick auf einen Helden = Startitems festlegen  (• = hat Items)",
+                 bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["small"], anchor="w"
+                 ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
 
         def _update_toggles():
-            on = self.cfg.get("doppel_check_enabled", True)
-            self._doppel_btn.config(
-                text=f"{'✓' if on else '–'}  Doppel-Pick-Check",
-                bg=PAL["accent"] if on else PAL["btn_bg"],
-                fg=PAL["on_accent"] if on else PAL["text_dim"],
-                activebackground=PAL["accent_hover"] if on else PAL["hover"],
-                activeforeground=PAL["on_accent"] if on else PAL["text"])
+            for btn, key, label in ((self._items_btn,  "item_buy_enabled",     "Startitems kaufen"),
+                                    (self._doppel_btn, "doppel_check_enabled", "Doppel-Pick-Check")):
+                on = self.cfg.get(key, True)
+                btn.config(text=f"{'✓' if on else '–'}  {label}",
+                           bg=PAL["accent"] if on else PAL["btn_bg"],
+                           fg=PAL["on_accent"] if on else PAL["text_dim"],
+                           activebackground=PAL["accent_hover"] if on else PAL["hover"],
+                           activeforeground=PAL["on_accent"] if on else PAL["text"])
         _update_toggles()
         self._update_onoff_btn = _update_toggles
 
@@ -1466,6 +1524,7 @@ class SkadiTerminalApp:
                                 padx=2, pady=3, highlightthickness=0)
                 btn.grid(row=current_row + i // HERO_COLS, column=i % HERO_COLS,
                          sticky="ew", padx=1, pady=1)
+                btn.bind("<Button-3>", lambda e, k=code: self._hero_context_menu(e, k))
                 self.hero_buttons[code] = btn
                 self._hero_color[code] = color
 
@@ -1479,9 +1538,11 @@ class SkadiTerminalApp:
     def _refresh_hero_buttons(self):
         """Ausgewählte Helden hervorheben und mit ihrer Pick-Reihenfolge beschriften."""
         order = {code: i + 1 for i, code in enumerate(self.selected_heroes)}
+        with_items = self.cfg.get("hero_items", {})
         for code, btn in self.hero_buttons.items():
             n = order.get(code)
-            btn.configure(text=f"{n}·{code}" if n else code,
+            mark = " •" if with_items.get(code) else ""          # • = hat Startitems
+            btn.configure(text=(f"{n}·{code}" if n else code) + mark,
                           bg=PAL["accent"] if n else PAL["btn_bg"],
                           fg=PAL["on_accent"] if n else self._hero_color.get(code, PAL["text"]),
                           font=self._fonts["hero_bold" if n else "hero"])
@@ -1501,9 +1562,6 @@ class SkadiTerminalApp:
         self._update_selected_label()
         self.status_var.set("Auswahl geleert.")
 
-    def _set_button_selected(self, hero_code: str, selected: bool):
-        self._refresh_hero_buttons()
-
     def _update_selected_label(self):
         n = len(self.selected_heroes)
         if not n:
@@ -1513,6 +1571,212 @@ class SkadiTerminalApp:
             self.selected_label.config(text=f"Auswahl {n}/8:  " + " → ".join(self.selected_heroes),
                                        fg=PAL["text"], font=self._fonts["ui_bold"])
         self._refresh_hero_buttons()
+        if self.cfg.get("last_selection") != self.selected_heroes:
+            self.cfg["last_selection"] = list(self.selected_heroes)
+            try:
+                save_config(self.cfg)
+            except OSError:
+                pass
+
+    # ──────────────────────────────────────────────────────────────────
+    # 🛒 Startitems pro Held  (Rechtsklick auf einen Helden)
+    # ──────────────────────────────────────────────────────────────────
+    def _hero_context_menu(self, event, code: str):
+        items = self.cfg.get("hero_items", {}).get(code, [])
+        menu = tk.Menu(self.root, tearoff=0, bg=PAL["surface"], fg=PAL["text"],
+                       activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
+                       font=self._fonts["ui"], bd=0)
+        menu.add_command(label="🛒  Items hinzufügen …" + (f"  ({len(items)})" if items else ""),
+                         command=lambda: self.open_item_editor(code))
+        if items:
+            menu.add_command(label="✕  Items entfernen", command=lambda: self._set_hero_items(code, []))
+        menu.add_separator()
+        menu.add_command(label="Abwählen" if code in self.selected_heroes else "Auswählen",
+                         command=lambda: self.toggle_hero(code))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _set_hero_items(self, code: str, items: list[str]):
+        hero_items = self.cfg.setdefault("hero_items", {})
+        if items:
+            hero_items[code] = list(items)
+        else:
+            hero_items.pop(code, None)
+        save_config(self.cfg)
+        self._refresh_hero_buttons()
+
+    def open_item_editor(self, hero: str):
+        """Startitems für einen Helden festlegen — Items per Drag & Drop in die Kaufliste ziehen."""
+        if not ITEM_CATALOG:
+            messagebox.showerror("Items fehlen", f"Keine Item-Bilder gefunden in:\n{ITEMS_DIR}",
+                                 parent=self.root)
+            return
+        win = tk.Toplevel(self.root)
+        win.title(f"Startitems – {hero}")
+        win.configure(bg=PAL["bg"])
+        win.transient(self.root)
+        win.resizable(False, False)
+        _apply_icon(win)
+
+        items: list[str] = list(self.cfg.get("hero_items", {}).get(hero, []))
+        # Icons 1,5-fach anzeigen (40×28 → 60×42)
+        icons = {}
+        for d in ITEM_CATALOG:
+            try:
+                icons[d["key"]] = tk.PhotoImage(file=str(item_icon_path(d["key"]))).zoom(3).subsample(2)
+            except tk.TclError:
+                pass
+        win._icons = icons                                  # Referenzen halten
+        COLS, SLOT_W, SLOT_H = 12, 66, 50
+
+        pad = tk.Frame(win, bg=PAL["bg"], padx=12, pady=10)
+        pad.pack(fill="both", expand=True)
+
+        tk.Label(pad, text=f"Kaufliste für  {hero.upper()}", bg=PAL["bg"], fg=PAL["text"],
+                 font=self._fonts["section"], anchor="w").pack(fill="x")
+        tk.Label(pad, text="Items aus dem Shop unten in die Liste ziehen (oder doppelklicken).  "
+                           "Aus der Liste rausziehen oder Rechtsklick = entfernen.  "
+                           "Innerhalb der Liste ziehen = Reihenfolge ändern.",
+                 bg=PAL["bg"], fg=PAL["text_dim"], font=self._fonts["small"],
+                 anchor="w", justify="left", wraplength=COLS * SLOT_W).pack(fill="x", pady=(0, 6))
+
+        zone = tk.Frame(pad, bg=PAL["surface"], highlightthickness=2,
+                        highlightbackground=PAL["separator"], width=COLS * SLOT_W + 8, height=SLOT_H + 12)
+        zone.pack(fill="x")
+        zone.pack_propagate(False)
+        zone_inner = tk.Frame(zone, bg=PAL["surface"])
+        zone_inner.place(x=4, y=4)
+
+        hover_var = tk.StringVar(value=" ")
+
+        def _hover(key):
+            hover_var.set(item_label(key) if key else " ")
+
+        drag = {"key": None, "from": None, "ghost": None, "moved": False}
+
+        def _over_zone(x, y) -> bool:
+            zx, zy = zone.winfo_rootx(), zone.winfo_rooty()
+            return zx <= x <= zx + zone.winfo_width() and zy <= y <= zy + zone.winfo_height()
+
+        def _drop_index(x, y) -> int:
+            col = int((x - zone_inner.winfo_rootx()) // SLOT_W)
+            row = int((y - zone_inner.winfo_rooty()) // SLOT_H)
+            return max(0, min(len(items), row * COLS + max(0, col)))
+
+        def _start(event, key, src=None):
+            drag.update(key=key, moved=False)
+            drag["from"] = src
+
+        def _motion(event):
+            if drag["key"] is None:
+                return
+            if drag["ghost"] is None:
+                g = tk.Toplevel(win)
+                g.overrideredirect(True)
+                try:
+                    g.attributes("-topmost", True)
+                    g.attributes("-alpha", 0.85)
+                except tk.TclError:
+                    pass
+                tk.Label(g, image=icons.get(drag["key"]), bd=0, bg=PAL["accent"]).pack()
+                drag["ghost"] = g
+            drag["moved"] = True
+            drag["ghost"].geometry(f"+{event.x_root - 30}+{event.y_root - 20}")
+            zone.config(highlightbackground=PAL["accent"] if _over_zone(event.x_root, event.y_root)
+                        else PAL["separator"])
+
+        def _release(event):
+            key, src, moved = drag["key"], drag["from"], drag["moved"]
+            if drag["ghost"] is not None:
+                drag["ghost"].destroy()
+            drag.update(key=None, ghost=None, moved=False)
+            drag["from"] = None
+            zone.config(highlightbackground=PAL["separator"])
+            if key is None or not moved:
+                return
+            if _over_zone(event.x_root, event.y_root):
+                idx = _drop_index(event.x_root, event.y_root)
+                if src is not None:                         # verschieben
+                    items.pop(src)
+                    if idx > src:
+                        idx -= 1
+                items.insert(min(idx, len(items)), key)
+            elif src is not None:                           # rausgezogen → entfernen
+                items.pop(src)
+            else:
+                return
+            _commit()
+
+        def _bind_drag(widget, key, src=None):
+            widget.bind("<ButtonPress-1>", lambda e: _start(e, key, src))
+            widget.bind("<B1-Motion>", _motion)
+            widget.bind("<ButtonRelease-1>", _release)
+            widget.bind("<Enter>", lambda e: _hover(key))
+            widget.bind("<Leave>", lambda e: _hover(None))
+
+        def _render():
+            for w in zone_inner.winfo_children():
+                w.destroy()
+            rows = max(1, (len(items) + COLS - 1) // COLS)
+            zone.config(height=rows * SLOT_H + 12)
+            if not items:
+                tk.Label(zone_inner, text="Items hierher ziehen …", bg=PAL["surface"],
+                         fg=PAL["text_dim"], font=self._fonts["ui"]).grid(row=0, column=0, padx=8, pady=12)
+            for i, key in enumerate(items):
+                cell = tk.Frame(zone_inner, bg=PAL["surface"], width=SLOT_W, height=SLOT_H)
+                cell.grid(row=i // COLS, column=i % COLS)
+                cell.pack_propagate(False)
+                lbl = tk.Label(cell, image=icons.get(key), bd=0, bg=PAL["surface"], cursor="fleur")
+                lbl.place(x=3, y=4)
+                num = tk.Label(cell, text=str(i + 1), bg=PAL["accent"], fg=PAL["on_accent"],
+                               font=self._fonts["small_bold"], padx=3)
+                num.place(x=0, y=0)
+                _bind_drag(lbl, key, i)
+                lbl.bind("<Button-3>", lambda e, k=i: (items.pop(k), _commit()))
+            count_var.set(f"{len(items)} Items")
+
+        def _commit():
+            self._set_hero_items(hero, items)
+            _render()
+
+        # Shop-Palette nach Kategorien
+        shop = tk.Frame(pad, bg=PAL["bg"])
+        shop.pack(fill="x", pady=(10, 0))
+        cats: dict[str, list[dict]] = {}
+        for d in ITEM_CATALOG:
+            cats.setdefault(d.get("cat", "Items"), []).append(d)
+        for cat, entries in cats.items():
+            tk.Label(shop, text=cat.upper(), bg=PAL["bg"], fg=PAL["text_dim"],
+                     font=self._fonts["section"], anchor="w").pack(fill="x", pady=(6, 2))
+            row = tk.Frame(shop, bg=PAL["bg"])
+            row.pack(fill="x")
+            for i, d in enumerate(entries):
+                key = d["key"]
+                lbl = tk.Label(row, image=icons.get(key), bd=0, bg=PAL["bg"], cursor="hand2")
+                lbl.grid(row=i // COLS, column=i % COLS, padx=2, pady=2)
+                _bind_drag(lbl, key)
+                lbl.bind("<Double-Button-1>", lambda e, k=key: (items.append(k), _commit()))
+
+        foot = tk.Frame(pad, bg=PAL["bg"])
+        foot.pack(fill="x", pady=(10, 0))
+        foot.columnconfigure(1, weight=1)
+        count_var = tk.StringVar()
+        tk.Label(foot, textvariable=hover_var, bg=PAL["bg"], fg=PAL["accent"],
+                 font=self._fonts["ui_bold"], anchor="w", width=24).grid(row=0, column=0, sticky="w")
+        tk.Label(foot, textvariable=count_var, bg=PAL["bg"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="e").grid(row=0, column=1, sticky="e", padx=8)
+        self._btn(foot, "Leeren", lambda: (items.clear(), _commit())
+                  ).grid(row=0, column=2, sticky="e", padx=(0, 4))
+        self._btn(foot, "✔ Fertig", win.destroy, accent=True).grid(row=0, column=3, sticky="e")
+
+        _render()
+        win.update_idletasks()
+        rx = self.root.winfo_x() + 40
+        ry = self.root.winfo_y() + 80
+        win.geometry(f"+{max(0, rx)}+{max(0, ry)}")
+        win.focus_force()
 
     # ──────────────────────────────────────────────────────────────────
     # 🎯 Hero-Pool-Manager  (komplette Held-Übersicht)
@@ -1873,13 +2137,7 @@ class SkadiTerminalApp:
         if not heroes:
             self.status_var.set(f"Preset '{name}' leer.")
             return
-        for code in list(self.selected_heroes):
-            self._set_button_selected(code, False)
-        self.selected_heroes = []
-        for code in heroes:
-            if code in self.hero_buttons:
-                self.selected_heroes.append(code)
-                self._set_button_selected(code, True)
+        self.selected_heroes = [c for c in heroes if c in self.hero_buttons][:8]
         self._update_selected_label()
         self.status_var.set(f"Preset '{name}' geladen: {', '.join(self.selected_heroes)}")
 
@@ -3058,7 +3316,8 @@ class SkadiTerminalApp:
         """
         Phase A — Suchfeld finden → 2x klicken → 2s warten
         Phase B — Helden der Reihe nach: tippen → ENTER → Auswählen klicken
-                  → auf PLANUNG warten (gefunden = Held ist gepickt)
+                  → auf PLANUNG oder Shop warten (sichtbar = Held ist gepickt)
+        Phase C — Startitems des gepickten Helden kaufen (Rechtsklick im Shop)
         Phase D — Doppel-Pick-Prüfung: Haben wir und das Gegnerteam denselben
                   Helden genommen, wird der Pick zurückgesetzt. Dann geht es
                   mit Phase A + B ab dem NÄCHSTEN Helden der Liste weiter.
@@ -3080,6 +3339,10 @@ class SkadiTerminalApp:
                     self._ui_status("✗ Kein Held aus der Liste konnte gepickt werden.")
                     return
                 hero = heroes[picked_idx]
+
+                self._phase_c_buy_items(hero, use_img)
+                if self.stop_pick.is_set():
+                    break
 
                 if not self._phase_d_duplicate_watch(hero, use_img):
                     if not self.stop_pick.is_set():
@@ -3186,7 +3449,8 @@ class SkadiTerminalApp:
         pick_interval = self._t("pick_click_interval", 0.05)
         planung_wait  = self._t("suchfeld_wait",       2.5)
         loop_pause    = self._t("loop_pause",          0.0)
-        has_planung   = use_img and PLANUNG_TEMPLATE_PATH.exists()
+        has_confirm   = use_img and (PLANUNG_TEMPLATE_PATH.exists()
+                                     or item_match_path(SHOP_ANCHOR_KEY).exists())
 
         for idx in range(start, len(heroes)):
             if self.stop_pick.is_set():
@@ -3228,19 +3492,23 @@ class SkadiTerminalApp:
                 ci += 1
                 time.sleep(pick_interval)
                 # Alle paar Klicks prüfen: PLANUNG schon da → sofort fertig
-                if has_planung and ci % 6 == 0 and self._find_on_screen(
-                        PLANUNG_TEMPLATE_PATH, 0.60, report=False):
-                    self._ui_status(f"✔ PLANUNG erkannt — '{hero}' gepickt.")
+                if has_confirm and ci % 6 == 0 and self._pick_confirmed():
+                    self._ui_status(f"✔ '{hero}' gepickt.")
                     return idx, True
             if self.stop_pick.is_set(): return None, False
 
-            # PLANUNG = Pick hat geklappt
-            if has_planung:
-                self._ui_status("Pick: warte auf Planung-Bildschirm...")
-                if self._wait_for(PLANUNG_TEMPLATE_PATH, 0.60, planung_wait, poll=0.25):
-                    self._ui_status(f"✔ PLANUNG erkannt — '{hero}' gepickt.")
-                    return idx, True
-                self._ui_status(f"PLANUNG nicht gefunden nach '{hero}' — nächster Held")
+            # PLANUNG oder Shop sichtbar = Pick hat geklappt
+            if has_confirm:
+                self._ui_status("Pick: warte auf Bestätigung (PLANUNG / Shop)...")
+                end = time.monotonic() + planung_wait
+                while not self.stop_pick.is_set():          # mindestens einmal prüfen
+                    if self._pick_confirmed():
+                        self._ui_status(f"✔ '{hero}' gepickt.")
+                        return idx, True
+                    if time.monotonic() >= end:
+                        break
+                    time.sleep(0.25)
+                self._ui_status(f"Kein Pick bestätigt nach '{hero}' — nächster Held")
             else:
                 # Ohne PLANUNG-Template kein Erfolgs-Check → alle Helden durchprobieren
                 self._sleep_interruptible(self.stop_pick, planung_wait)
@@ -3249,9 +3517,107 @@ class SkadiTerminalApp:
             if loop_pause > 0:
                 self._sleep_interruptible(self.stop_pick, loop_pause)
 
-        if has_planung:
+        if has_confirm:
             self._save_debug_screenshot("planung")
         return None, False
+
+    # ── Phase C ───────────────────────────────────────────────────────
+    def _pick_confirmed(self, screen=None) -> bool:
+        """Pick hat geklappt, wenn PLANUNG oder der Item-Shop zu sehen ist."""
+        if PLANUNG_TEMPLATE_PATH.exists() and self._find_on_screen(
+                PLANUNG_TEMPLATE_PATH, 0.60, screen=screen, report=False):
+            return True
+        anchor = item_match_path(SHOP_ANCHOR_KEY)
+        return anchor.exists() and bool(self._find_on_screen(anchor, 0.78, screen=screen, report=False))
+
+    def _locate_items(self, keys: list[str], scale) -> dict[str, tuple[int, int]]:
+        """
+        Sucht die Items im Shop (in Farbe, damit z. B. Observer und Sentry Ward nicht
+        verwechselt werden) und liefert die Mitte des jeweiligen Icons.
+        Inventar links vom Shop wird ignoriert; bei mehreren gleichen Treffern
+        (Raster / Vorschläge / Team-Reihe) wird der im Raster genommen.
+        """
+        screen = _grab_screen_bgr()
+        sx, sy = _scale_xy(scale)
+
+        def _templ(key):
+            t = cv2.imread(str(item_match_path(key)))
+            if t is None:
+                return None
+            if abs(sx - 1) > 0.001 or abs(sy - 1) > 0.001:
+                h, w = t.shape[:2]
+                t = cv2.resize(t, (max(4, round(w * sx)), max(4, round(h * sy))),
+                               interpolation=cv2.INTER_AREA if sx * sy < 1 else cv2.INTER_CUBIC)
+            return t
+
+        def _peaks(t, min_x=0, tol=0.06):
+            """Alle Stellen, die fast so gut passen wie der beste Treffer."""
+            r = cv2.matchTemplate(screen, t, cv2.TM_CCOEFF_NORMED)
+            if min_x > 0:
+                r[:, :max(0, min(min_x, r.shape[1]))] = -1
+            best = float(r.max())
+            if best < 0.75:
+                return None
+            ys, xs = np.where(r >= best - tol)
+            return xs, ys
+
+        # Anker: der Eisenzweig im Attribut-Raster (der rechteste Treffer).
+        #   • alles deutlich links davon = Inventar → ignorieren
+        #   • gleiche Items gibt es auch in der Vorschlags- und Team-Reihe → es zählt
+        #     der Treffer, der der Raster-Mitte (eine Zeile unter dem Anker) am nächsten ist
+        anchor = _templ(SHOP_ANCHOR_KEY)
+        if anchor is None:
+            return {}
+        pk = _peaks(anchor)
+        if pk is None:
+            return {}
+        a = int(np.argmax(pk[0]))
+        ax, ay = int(pk[0][a]), int(pk[1][a])
+        min_x    = int(ax - 250 * sx)
+        target_y = ay + 37 * sy                      # Raster: 3 Zeilen à ~37 px (bei 1200 px Höhe)
+
+        found = {}
+        for key in dict.fromkeys(keys):
+            t = _templ(key)
+            pk = _peaks(t, min_x) if t is not None else None
+            if pk is None:
+                continue
+            xs, ys = pk
+            i = int(np.argmin(np.abs(ys - target_y)))
+            th, tw = t.shape[:2]
+            found[key] = (int(xs[i]) + tw // 2, int(ys[i]) + round(th / 0.55 / 2))
+        return found
+
+    def _phase_c_buy_items(self, hero: str, use_img: bool):
+        """Kauft die für diesen Helden festgelegten Startitems per Rechtsklick im Shop."""
+        if not use_img or not self.cfg.get("item_buy_enabled", True):
+            return
+        keys = [k for k in self.cfg.get("hero_items", {}).get(hero, []) if item_match_path(k).exists()]
+        anchor = item_match_path(SHOP_ANCHOR_KEY)
+        if not keys or not anchor.exists():
+            return
+        self._ui_status(f"Phase C: warte auf den Shop ({len(keys)} Items für '{hero}')...")
+        if not self._wait_for(anchor, 0.78, 10.0, poll=0.3):
+            self._ui_status("Phase C: Shop nicht gefunden — keine Items gekauft.")
+            return
+        positions = self._locate_items(keys, self._last_match[1])
+        sh, sw = _grab_screen_gray().shape
+        park = (sw // 2, max(5, sh // 14))          # Maus danach weg, damit Tooltips nichts verdecken
+        bought = 0
+        for key in keys:
+            if self.stop_pick.is_set() or not self._wait_game_focus():
+                return
+            pos = positions.get(key)
+            if not pos:
+                self._ui_status(f"Phase C: ⚠ {item_label(key)} nicht gefunden")
+                continue
+            self._move_exact(*pos, 0.06)
+            pyautogui.click(button="right")
+            bought += 1
+            self._ui_status(f"Phase C: ✔ {item_label(key)} ({bought}/{len(keys)})")
+            self._move_exact(*park, 0.03)
+            time.sleep(0.25)
+        self._ui_status(f"Phase C: {bought}/{len(keys)} Startitems für '{hero}' gekauft.")
 
     # ── Phase D ───────────────────────────────────────────────────────
     def _phase_d_duplicate_watch(self, hero: str, use_img: bool, force: bool = False) -> bool:
@@ -3261,7 +3627,7 @@ class SkadiTerminalApp:
 
         Signale:
           1. Doppel-Pick-Template (skadi_doppelt.png) ist sichtbar
-          2. Das Helden-Suchfeld ist wieder da UND PLANUNG ist weg
+          2. Das Helden-Suchfeld ist wieder da UND PLANUNG/Shop ist weg
              (3x hintereinander, damit kurzes Flackern nicht auslöst)
 
         Rückgabe: True = Doppel-Pick erkannt → neu picken.
@@ -3269,7 +3635,8 @@ class SkadiTerminalApp:
         if not use_img or not (force or self.cfg.get("doppel_check_enabled", True)):
             return False
         has_doppelt = DOPPELT_TEMPLATE_PATH.exists()
-        has_field   = FIELD_TEMPLATE_PATH.exists() and PLANUNG_TEMPLATE_PATH.exists()
+        has_field   = FIELD_TEMPLATE_PATH.exists() and (PLANUNG_TEMPLATE_PATH.exists()
+                                                     or item_match_path(SHOP_ANCHOR_KEY).exists())
         if not (has_doppelt or has_field):
             return False
 
@@ -3285,8 +3652,7 @@ class SkadiTerminalApp:
             if has_field:
                 field_back = self._find_on_screen(FIELD_TEMPLATE_PATH, 0.65,
                                                   screen=screen, report=False)
-                planung    = field_back and self._find_on_screen(PLANUNG_TEMPLATE_PATH, 0.60,
-                                                                 screen=screen, report=False)
+                planung    = field_back and self._pick_confirmed(screen)
                 hits = hits + 1 if (field_back and not planung) else 0
                 if hits >= 3:
                     return True
@@ -3461,6 +3827,11 @@ class SkadiTerminalApp:
         self.root.after(30_000, self._auto_close_check)
 
     def on_close(self):
+        self.cfg["last_selection"] = list(self.selected_heroes)
+        try:
+            save_config(self.cfg)
+        except OSError:
+            pass
         self.stop_all_macros()
         try: self.kb_listener.stop()
         except Exception: pass
