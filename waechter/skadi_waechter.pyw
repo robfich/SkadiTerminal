@@ -1,8 +1,10 @@
 """
 SkadiTerminal-Wächter
 Läuft unsichtbar im Hintergrund (Autostart) und startet SkadiTerminal,
-sobald Dota 2 (oder ein anderes Spiel aus TARGET_GAMES) läuft.
-Startet außerdem Discord, wenn Dota 2 startet (einmal pro Spielsitzung).
+sobald Dota 2 (oder ein anderes Spiel aus TARGET_GAMES) läuft — EINMAL pro Spielsitzung:
+Wer SkadiTerminal während des Spiels schließt, bekommt es erst beim nächsten Spielstart wieder.
+Startet außerdem Discord (minimiert), wenn Dota 2 startet, und schließt Discord wieder,
+wenn Dota 2 beendet wird.
 SkadiTerminal schließt sich selbst wieder, wenn 3 Minuten kein Spiel mehr läuft.
 """
 import os
@@ -22,11 +24,14 @@ CONFIG_REFRESH_SECONDS = 30.0
 # Wie oft prüfen (Sekunden)
 POLL_SECONDS = 2.0
 
-# Mindest-Abstand zwischen Starts (Sekunden), falls ein Spiel mehrfach kurz startet
-COOLDOWN_SECONDS = 20.0
+# So viele Prüfungen hintereinander muss ein Spiel weg sein, bevor die Sitzung als beendet gilt
+# (verhindert Neustarts, wenn ein Spiel kurz neu startet, z. B. nach einem Update)
+SESSION_END_POLLS = 3
 
-# Discord mitstarten, wenn eines dieser Spiele startet (leere Menge = aus)
+# Discord mitstarten (minimiert), wenn eines dieser Spiele startet, und wieder
+# schließen, wenn es beendet wird (leere Menge = aus)
 DISCORD_WITH_GAMES = {"dota2.exe"}
+DISCORD_CLOSE_WITH_GAME = True
 DISCORD_PROCS      = {"discord.exe", "discordcanary.exe", "discordptb.exe"}
 
 # Prozess-/Dateinamen, an denen ein laufendes Terminal erkannt wird
@@ -106,19 +111,50 @@ def any_target_game_running() -> bool:
 
 
 def start_discord() -> bool:
-    """Discord über den offiziellen Updater starten (wie der Start-Button in SkadiTerminal)."""
+    """Discord minimiert (nur im Tray) über den offiziellen Updater starten."""
     for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA")):
         if not base:
             continue
         updater = Path(base) / "Discord" / "Update.exe"
         if updater.exists():
             try:
-                subprocess.Popen([str(updater), "--processStart", "Discord.exe"],
+                subprocess.Popen([str(updater), "--processStart", "Discord.exe",
+                                  "--process-start-args", "--start-minimized"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return True
             except OSError:
                 pass
     return False
+
+
+def close_discord():
+    for p in psutil.process_iter(["name"]):
+        try:
+            if (p.info["name"] or "").lower() in DISCORD_PROCS:
+                p.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+
+class Session:
+    """Merkt sich, ob eine Spielsitzung läuft — mit kurzer Nachlaufzeit beim Beenden."""
+    def __init__(self):
+        self.active = False
+        self._missing = 0
+
+    def update(self, running: bool) -> str | None:
+        """Liefert 'start' beim Sitzungsbeginn, 'end' beim Sitzungsende, sonst None."""
+        if running:
+            self._missing = 0
+            if not self.active:
+                self.active = True
+                return "start"
+        elif self.active:
+            self._missing += 1
+            if self._missing >= SESSION_END_POLLS:
+                self.active = False
+                return "end"
+        return None
 
 
 def terminal_already_running() -> bool:
@@ -146,8 +182,8 @@ def start_terminal(path: Path):
 
 
 def main():
-    last_launch = 0.0
-    discord_game_was_running = False
+    game_session    = Session()     # irgendein Spiel aus der Liste → SkadiTerminal
+    discord_session = Session()     # Dota → Discord an/aus
     games, games_loaded = load_games(), time.time()
     while True:
         try:
@@ -155,19 +191,20 @@ def main():
                 games, games_loaded = load_games(), time.time()
             names = running_process_names()
 
-            # Discord: nur beim Übergang "Dota aus → Dota an", damit ein bewusst
-            # geschlossenes Discord nicht ständig wieder aufgeht
-            discord_game = bool(names & DISCORD_WITH_GAMES)
-            if discord_game and not discord_game_was_running and not (names & DISCORD_PROCS):
-                start_discord()
-            discord_game_was_running = discord_game
-
-            if names & games:
-                now = time.time()
+            # SkadiTerminal: nur EINMAL beim Sitzungsbeginn starten. Wird es während
+            # des Spiels geschlossen, bleibt es zu bis zum nächsten Spielstart.
+            if game_session.update(bool(names & games)) == "start":
                 terminal = find_terminal()
-                if terminal and not terminal_already_running() and (now - last_launch) >= COOLDOWN_SECONDS:
+                if terminal and not terminal_already_running():
                     start_terminal(terminal)
-                    last_launch = now
+
+            # Discord: mit Dota starten (minimiert) und mit Dota wieder schließen
+            if DISCORD_WITH_GAMES:
+                event = discord_session.update(bool(names & DISCORD_WITH_GAMES))
+                if event == "start" and not (names & DISCORD_PROCS):
+                    start_discord()
+                elif event == "end" and DISCORD_CLOSE_WITH_GAME:
+                    close_discord()
         except Exception:
             pass
         time.sleep(POLL_SECONDS)

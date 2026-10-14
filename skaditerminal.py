@@ -167,16 +167,11 @@ _migrate_legacy_files()
 FIELD_TEMPLATE_PATH  = DATA_DIR / f"{_PREFIX}_field.png"
 AUSWAHL_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_auswahl.png"
 PLANUNG_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_planung.png"
-NEUTRAL_POS_PATH     = DATA_DIR / f"{_PREFIX}_neutral.png"
 DOPPELT_TEMPLATE_PATH= DATA_DIR / f"{_PREFIX}_doppelt.png"
 ICON_PATH            = next((p for p in (_BASE_DIR / "skaditerminal.ico",
                                          _BUNDLE_DIR / "skaditerminal.ico",
                                          _BASE_DIR / "germinallogo.ico") if p.exists()),
                             _BASE_DIR / "skaditerminal.ico")
-
-def _item_file(set_idx: int, item_idx: int) -> str:
-    """Dateiname des Item-Templates (beide Indizes 0-basiert)."""
-    return f"{_PREFIX}_{set_idx+1}_{item_idx+1}.png"
 
 def _get_config_path() -> Path:
     return DATA_DIR / f"{_PREFIX}_config.json"
@@ -412,16 +407,7 @@ DEFAULT_CONFIG = {
     "font_large":   False,
     "game_res":     [1920, 1200],
     "pick_mode":    "both",         # "image" | "coords" | "both"
-    # Item-Sets für Phase C (6 Sets, je bis zu 6 Items)
-    "item_sets": [
-        {"name": f"Set {i+1}", "items": [
-            {"label": lbl, "file": _item_file(i, j)}
-            for j, lbl in enumerate(["Boots","Iron Branch","Stick","Item 4","Item 5","Item 6"])
-        ]} for i in range(6)
-    ],
-    "active_item_set": 0,
     "games": list(DEFAULT_GAMES),       # Spiele für Wächter, "Spiele schließen", Auto-Close
-    "item_phase_enabled": True,
     "doppel_check_enabled": True,   # Phase D an/aus
 }
 
@@ -445,12 +431,13 @@ def load_config() -> dict:
                 if t.get("type_duration") == 4.0: t["type_duration"] = 1.2
                 if t.get("enter_pause") == 1.0:   t["enter_pause"] = 0.5
                 cfg["timings_v2"] = True
-            # Item-Templates von gterminal_* auf skadi_* umbenennen
-            for s in cfg.get("item_sets", []):
-                for it in s.get("items", []):
-                    f = it.get("file", "")
-                    if f.startswith(_LEGACY_PREFIX + "_"):
-                        it["file"] = _PREFIX + f[len(_LEGACY_PREFIX):]
+            # v3: evtl. falsch gelernte Skalierungen einmalig verwerfen (neue Suche ist strenger)
+            if not cfg.get("scales_v3"):
+                cfg["learned_scales"] = {}
+                cfg["scales_v3"] = True
+            # Item-Kauf gibt es nicht mehr → alte Einträge entfernen
+            for k in ("item_sets", "active_item_set", "item_phase_enabled"):
+                cfg.pop(k, None)
             return cfg
     return copy.deepcopy(DEFAULT_CONFIG)
 
@@ -964,67 +951,29 @@ class SkadiTerminalApp:
         self._small_btn(top_row, "✕ leeren", self.clear_selection
                         ).grid(row=0, column=1, sticky="ne", padx=(4, 0))
 
-        # Zeile 1: Phasen-Schalter + Item-Sets
-        item_row = tk.Frame(tab_pick, bg=PAL["surface"])
-        item_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        item_row.columnconfigure((0, 1, 2, 3, 4, 5), weight=1, uniform="itemset")
+        # Zeile 1: Doppel-Check-Schalter
+        toggle_row = tk.Frame(tab_pick, bg=PAL["surface"])
+        toggle_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        toggle_row.columnconfigure(0, weight=1)
 
-        self._item_phase_var = tk.BooleanVar(value=self.cfg.get("item_phase_enabled", True))
-
-        def _toggle_cfg(key):
-            self.cfg[key] = not self.cfg.get(key, True)
+        def _toggle_doppel():
+            self.cfg["doppel_check_enabled"] = not self.cfg.get("doppel_check_enabled", True)
             save_config(self.cfg)
             _update_toggles()
 
-        self._onoff_btn  = self._toggle_btn(item_row, lambda: _toggle_cfg("item_phase_enabled"))
-        self._onoff_btn.grid(row=0, column=0, columnspan=2, sticky="ew", padx=(0, 2))
-        self._doppel_btn = self._toggle_btn(item_row, lambda: _toggle_cfg("doppel_check_enabled"))
-        self._doppel_btn.grid(row=0, column=2, columnspan=2, sticky="ew", padx=2)
-        self._small_btn(item_row, "⚙ Item-Sets", self.open_item_set_editor
-                        ).grid(row=0, column=4, columnspan=2, sticky="ew", padx=(2, 0))
+        self._doppel_btn = self._toggle_btn(toggle_row, _toggle_doppel)
+        self._doppel_btn.grid(row=0, column=0, sticky="ew")
 
         def _update_toggles():
-            for btn, key, label in ((self._onoff_btn,  "item_phase_enabled",   "Items kaufen"),
-                                    (self._doppel_btn, "doppel_check_enabled", "Doppel-Check")):
-                on = self.cfg.get(key, True)
-                btn.config(text=f"{'✓' if on else '–'}  {label}",
-                           bg=PAL["accent"] if on else PAL["btn_bg"],
-                           fg=PAL["on_accent"] if on else PAL["text_dim"],
-                           activebackground=PAL["accent_hover"] if on else PAL["hover"],
-                           activeforeground=PAL["on_accent"] if on else PAL["text"])
-            self._item_phase_var.set(self.cfg.get("item_phase_enabled", True))
+            on = self.cfg.get("doppel_check_enabled", True)
+            self._doppel_btn.config(
+                text=f"{'✓' if on else '–'}  Doppel-Pick-Check",
+                bg=PAL["accent"] if on else PAL["btn_bg"],
+                fg=PAL["on_accent"] if on else PAL["text_dim"],
+                activebackground=PAL["accent_hover"] if on else PAL["hover"],
+                activeforeground=PAL["on_accent"] if on else PAL["text"])
         _update_toggles()
         self._update_onoff_btn = _update_toggles
-
-        self._item_set_var  = tk.IntVar(value=self.cfg.get("active_item_set", 0))
-        self._item_set_btns: list[tk.Button] = []
-
-        def _set_active_item_set(idx: int):
-            self.cfg["active_item_set"] = idx
-            save_config(self.cfg)
-            self._item_set_var.set(idx)
-            _refresh_item_set_btns()
-
-        def _refresh_item_set_btns():
-            active = self.cfg.get("active_item_set", 0)
-            sets   = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
-            for i, btn in enumerate(self._item_set_btns):
-                on = i == active
-                btn.config(text=sets[i]["name"] if i < len(sets) else f"Set {i+1}",
-                           bg=PAL["accent"] if on else PAL["btn_bg"],
-                           fg=PAL["on_accent"] if on else PAL["text"],
-                           font=self._fonts["small_bold" if on else "small"])
-        self._refresh_item_set_btns = _refresh_item_set_btns
-
-        for idx in range(6):
-            btn = tk.Button(item_row, command=lambda i=idx: _set_active_item_set(i),
-                            relief="flat", bd=0, cursor="hand2", padx=2, pady=3,
-                            activebackground=PAL["accent"], activeforeground=PAL["on_accent"],
-                            highlightthickness=0)
-            btn.grid(row=1, column=idx, sticky="ew",
-                     padx=(0 if idx == 0 else 1, 0 if idx == 5 else 1), pady=(4, 0))
-            self._item_set_btns.append(btn)
-        _refresh_item_set_btns()
 
         # Zeile 2: Presets
         preset_outer = tk.Frame(tab_pick, bg=PAL["surface"])
@@ -1166,10 +1115,9 @@ class SkadiTerminalApp:
             ("Skalierung neu lernen",        self.reset_learned_scales),
         ])
 
-        cfg_header("PICK & ITEMS")
+        cfg_header("PICK")
         cfg_buttons([
             ("Zeiten & Hotkey",          self.open_timing_config),
-            ("Item-Sets verwalten",      self.open_item_set_editor),
             ("Held-Pool verwalten",      self.open_hero_pool_manager),
             ("Spiele-Liste bearbeiten",  self.open_games_editor),
             ("Eigenen Held hinzufügen",  self.open_hero_manager),
@@ -2413,219 +2361,6 @@ class SkadiTerminalApp:
     # ──────────────────────────────────────────────────────────────────
     # Bilderkennung
     # ──────────────────────────────────────────────────────────────────
-    # ──────────────────────────────────────────────────────────────────
-    # Item-Set Editor
-    # ──────────────────────────────────────────────────────────────────
-    def open_item_set_editor(self):
-        """Öffnet den Editor für Item-Sets (3 Sets × 6 Items)."""
-        win = tk.Toplevel(self.root)
-        win.title("Item-Sets verwalten")
-        win.configure(bg=PAL["bg"])
-        win.grab_set()
-        win.focus_force()
-        win.columnconfigure(0, weight=1)
-        win.rowconfigure(1, weight=1)
-        _apply_icon(win)
-
-        # Header
-        hdr = tk.Frame(win, bg=PAL["surface2"])
-        hdr.grid(row=0, column=0, sticky="ew")
-        tk.Label(hdr, text="  🛒  Item-Sets  (bis zu 6 Items pro Set)",
-                 bg=PAL["surface2"], fg=PAL["accent"],
-                 font=self._fonts["section"], anchor="w", padx=6, pady=4
-                 ).pack(fill="x")
-
-        # Item-Phase aktivieren Toggle
-        ip_frame = tk.Frame(win, bg=PAL["surface"], padx=8, pady=4)
-        ip_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
-        ip_var = tk.BooleanVar(value=self.cfg.get("item_phase_enabled", True))
-
-        def _toggle_item_phase():
-            self.cfg["item_phase_enabled"] = ip_var.get()
-            save_config(self.cfg)
-            self._update_onoff_btn()
-
-        tk.Checkbutton(ip_frame, text="Phase C (Item-Kauf) aktiviert",
-                       variable=ip_var, command=_toggle_item_phase,
-                       bg=PAL["surface"], fg=PAL["text"],
-                       selectcolor=PAL["input_bg"],
-                       activebackground=PAL["surface"], activeforeground=PAL["accent"],
-                       font=self._fonts["ui"], bd=0, cursor="hand2"
-                       ).pack(side="left")
-
-        # Notebook für 3 Sets
-        style = ttk.Style()
-        style.configure("Item.TNotebook", background=PAL["bg"], borderwidth=0)
-        style.configure("Item.TNotebook.Tab",
-                        background=PAL["btn_bg"], foreground=PAL["text_dim"],
-                        padding=[8, 3], font=("Segoe UI", 7, "bold"))
-        style.map("Item.TNotebook.Tab",
-                  background=[("selected", PAL["surface2"])],
-                  foreground=[("selected", PAL["accent"])])
-
-        nb = ttk.Notebook(win, style="Item.TNotebook")
-        nb.grid(row=1, column=0, sticky="nsew", padx=10, pady=8)
-
-        item_sets   = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
-        name_vars:  list[tk.StringVar] = []
-        label_vars: list[list[tk.StringVar]] = []
-
-        for set_idx in range(6):
-            s = item_sets[set_idx] if set_idx < len(item_sets) else {"name": f"Set {set_idx+1}", "items": []}
-            tab = tk.Frame(nb, bg=PAL["surface"])
-            tab.columnconfigure(1, weight=1)
-
-            # Set-Name
-            nm_var = tk.StringVar(value=s.get("name", f"Set {set_idx+1}"))
-            name_vars.append(nm_var)
-            tk.Label(tab, text="Set-Name:", bg=PAL["surface"], fg=PAL["text_dim"],
-                     font=self._fonts["small"], anchor="w"
-                     ).grid(row=0, column=0, sticky="w", padx=(6,4), pady=(6,4))
-            tk.Entry(tab, textvariable=nm_var, bg=PAL["input_bg"], fg=PAL["text"],
-                     insertbackground=PAL["accent"], relief="flat", bd=0,
-                     font=self._fonts["mono"], highlightthickness=1,
-                     highlightbackground=PAL["separator"], highlightcolor=PAL["accent"]
-                     ).grid(row=0, column=1, sticky="ew", padx=(0,6), pady=(6,4))
-
-            # Trennlinie
-            tk.Frame(tab, bg=PAL["separator"], height=1
-                     ).grid(row=1, column=0, columnspan=3, sticky="ew", padx=6, pady=(0,4))
-
-            set_label_vars: list[tk.StringVar] = []
-            items = s.get("items", [])
-
-            default_labels = ["Boots", "Iron Branch", "Stick",
-                              "Item 4", "Item 5", "Item 6"]
-
-            for item_idx in range(6):
-                item = items[item_idx] if item_idx < len(items) else {}
-                lbl_var = tk.StringVar(value=item.get("label", default_labels[item_idx]))
-                set_label_vars.append(lbl_var)
-
-                item_path = DATA_DIR / item.get("file", _item_file(set_idx, item_idx))
-                has_tmpl  = item_path.exists()
-                row_bg    = PAL["surface"] if item_idx % 2 == 0 else PAL["btn_bg"]
-
-                cell = tk.Frame(tab, bg=row_bg)
-                cell.grid(row=2+item_idx, column=0, columnspan=3, sticky="ew", padx=4, pady=1)
-                cell.columnconfigure(1, weight=1)
-
-                tk.Label(cell, text=f"{item_idx+1}.",
-                         bg=row_bg, fg=PAL["text_dim"],
-                         font=self._fonts["small"], width=2, anchor="e"
-                         ).grid(row=0, column=0, padx=(4,4))
-
-                tk.Entry(cell, textvariable=lbl_var,
-                         bg=row_bg, fg=PAL["text"],
-                         insertbackground=PAL["accent"], relief="flat", bd=0,
-                         font=self._fonts["mono"], highlightthickness=1,
-                         highlightbackground=PAL["separator"],
-                         highlightcolor=PAL["accent"]
-                         ).grid(row=0, column=1, sticky="ew", padx=(0,4), pady=2)
-
-                # Template-Status + Aufnahme-Button
-                status_txt = "✔" if has_tmpl else "✗"
-                status_fg  = PAL["success"] if has_tmpl else PAL["danger"]
-                status_lbl = tk.Label(cell, text=status_txt,
-                                      bg=row_bg, fg=status_fg,
-                                      font=self._fonts["mono"], width=2)
-                status_lbl.grid(row=0, column=2, padx=(0,2))
-
-                def make_capture(si=set_idx, ii=item_idx, slbl=status_lbl):
-                    def _capture():
-                        tpath = DATA_DIR / _item_file(si, ii)
-                        slbl.config(text="3s...", fg=PAL["accent"])
-                        win.update_idletasks()
-                        def _do():
-                            time.sleep(3)
-                            try:
-                                self._capture_template(tpath, region_w=60, region_h=60)
-                                self.root.after(0, lambda: slbl.config(text="✔", fg=PAL["success"]))
-                            except Exception as e:
-                                self.root.after(0, lambda err=e: slbl.config(
-                                    text="✗", fg=PAL["danger"]))
-                        threading.Thread(target=_do, daemon=True).start()
-                    return _capture
-
-                def make_delete(si=set_idx, ii=item_idx, slbl=status_lbl):
-                    def _delete():
-                        tpath = DATA_DIR / _item_file(si, ii)
-                        try:
-                            if tpath.exists():
-                                tpath.unlink()
-                            slbl.config(text="✗", fg=PAL["danger"])
-                        except Exception:
-                            pass
-                    return _delete
-
-                tk.Button(cell, text="📷",
-                          command=make_capture(),
-                          bg=row_bg, fg=PAL["int_col"],
-                          relief="flat", bd=0, cursor="hand2",
-                          font=self._fonts["small"], padx=4, pady=1,
-                          highlightthickness=0
-                          ).grid(row=0, column=3, padx=(0,2))
-
-                tk.Button(cell, text="🗑",
-                          command=make_delete(),
-                          bg=row_bg, fg=PAL["danger"],
-                          activebackground=PAL["danger"], activeforeground=PAL["on_accent"],
-                          relief="flat", bd=0, cursor="hand2",
-                          font=self._fonts["small"], padx=4, pady=1,
-                          highlightthickness=0
-                          ).grid(row=0, column=4, padx=(0,4))
-
-            label_vars.append(set_label_vars)
-            nb.add(tab, text=s.get("name", f"Set {set_idx+1}"))
-
-        # Speichern
-        fb_var = tk.StringVar()
-        tk.Label(win, textvariable=fb_var, bg=PAL["bg"], fg=PAL["success"],
-                 font=self._fonts["small"], anchor="w", padx=10
-                 ).grid(row=2, column=0, sticky="ew", pady=(0,2))
-
-        btn_row = tk.Frame(win, bg=PAL["bg"])
-        btn_row.grid(row=3, column=0, sticky="ew", padx=10, pady=(0,10))
-        btn_row.columnconfigure((0,1), weight=1)
-
-        def do_save():
-            sets = self.cfg.get("item_sets", [])
-            while len(sets) < 6:
-                sets.append({"name": f"Set {len(sets)+1}", "items": []})
-            for si in range(6):
-                sets[si]["name"] = name_vars[si].get().strip() or f"Set {si+1}"
-                while len(sets[si]["items"]) < 6:
-                    n = len(sets[si]["items"]) + 1
-                    sets[si]["items"].append({"label": f"Item {n}",
-                                              "file":  _item_file(si, n-1)})
-                for ii in range(6):
-                    sets[si]["items"][ii]["label"] = label_vars[si][ii].get().strip()
-                # Tab-Text aktualisieren
-                nb.tab(si, text=sets[si]["name"])
-            self.cfg["item_sets"] = sets
-            save_config(self.cfg)
-            self._refresh_item_set_btns()
-            fb_var.set("✔ Gespeichert!")
-
-        tk.Button(btn_row, text="✔  Speichern", command=do_save,
-                  bg=PAL["accent"], fg=PAL["on_accent"],
-                  activebackground=PAL["success"], activeforeground=PAL["on_accent"],
-                  relief="flat", bd=0, cursor="hand2",
-                  font=self._fonts["big_bold"], padx=6, pady=5, highlightthickness=0
-                  ).grid(row=0, column=0, sticky="ew", padx=(0,4))
-        tk.Button(btn_row, text="Abbrechen", command=win.destroy,
-                  bg=PAL["btn_bg"], fg=PAL["text"],
-                  activebackground=PAL["separator"], activeforeground=PAL["text"],
-                  relief="flat", bd=0, cursor="hand2",
-                  font=self._fonts["ui"], padx=6, pady=5, highlightthickness=0
-                  ).grid(row=0, column=1, sticky="ew", padx=(4,0))
-
-        win.update_idletasks()
-        win.geometry("460x600")
-        rx = self.root.winfo_x() + self.root.winfo_width()//2  - 210
-        ry = self.root.winfo_y() + self.root.winfo_height()//2 - 260
-        win.geometry(f"+{max(0,rx)}+{max(0,ry)}")
-
     def reset_learned_scales(self):
         self.cfg["learned_scales"] = {}
         self._last_sweep.clear()
@@ -2679,7 +2414,7 @@ class SkadiTerminalApp:
         if cfgs and messagebox.askyesno(
                 "Einstellungen übernehmen?",
                 f"In {src.name} liegt auch eine Config ({cfgs[0].name}).\n\n"
-                "Presets, Item-Sets, Held-Pool und Zeiten übernehmen?\n"
+                "Presets, Held-Pool und Zeiten übernehmen?\n"
                 "(Die aktuellen Einstellungen werden ersetzt.)", parent=self.root):
             try:
                 shutil.copy2(cfgs[0], CONFIG_PATH)
@@ -2691,7 +2426,6 @@ class SkadiTerminalApp:
                 self._refresh_mode_buttons()
                 self._rebuild_hero_grid()
                 self._rebuild_preset_buttons()
-                self._refresh_item_set_btns()
                 self._update_onoff_btn()
                 self._update_hotkey_hint()
                 cfg_msg = " + Einstellungen"
@@ -2842,8 +2576,9 @@ class SkadiTerminalApp:
                         screen=None, report: bool = True):
         """
         Template-Match auf dem Bildschirm — unabhängig von der Auflösung:
-        Das Template wird passend skaliert. Die erste Skalierung, die trifft, wird
-        pro Bildschirmauflösung gemerkt; danach wird nur noch diese probiert.
+        Bei derselben Auflösung wie bei der Aufnahme wird 1:1 gesucht. Sonst wird das
+        Template in mehreren Größen probiert, die beste genommen und (wenn eindeutig)
+        pro Bildschirmauflösung gemerkt.
 
         screen: optional ein bereits aufgenommener Graustufen-Screenshot, damit
                 mehrere Templates gegen denselben Frame geprüft werden können.
@@ -2857,30 +2592,38 @@ class SkadiTerminalApp:
             sh, sw = screen_g.shape
             learned, cands = self._scale_candidates(template_path, sw, sh)
 
-            # Mit gelernter Skalierung nur diese probieren; volle Suche höchstens alle 2 s
-            now = time.monotonic()
-            last = self._last_sweep.get(template_path, 0.0)
-            if learned and now - last < 10.0:
-                cands = cands[:1]
-            elif not learned and now - last < 2.0:
-                cands = cands[:1]
-            else:
-                self._last_sweep[template_path] = now
-
-            best = (-1.0, None, 1.0, (0, 0))
-            for scale in cands:
+            def _match(scale):
                 template = _TEMPLATES.get(template_path, scale)
                 if template is None:
-                    continue
+                    return None
                 th, tw = template.shape
                 if th > sh or tw > sw:
-                    continue
+                    return None
                 result = cv2.matchTemplate(screen_g, template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                if max_val > best[0]:
-                    best = (max_val, max_loc, scale, (tw, th))
-                if max_val >= confidence:
-                    break
+                return (max_val, max_loc, scale, (tw, th))
+
+            best = (-1.0, None, 1.0, (0, 0))
+            cap = load_template_meta().get(template_path.name)
+            if cap and (sw, sh) == tuple(cap):
+                # Gleiche Auflösung wie bei der Aufnahme → 1:1 wie früher, nichts raten
+                best = _match(1.0) or best
+            else:
+                # Mit gelernter Skalierung nur diese probieren; volle Suche höchstens alle 3 s
+                now = time.monotonic()
+                last = self._last_sweep.get(template_path, 0.0)
+                if now - last < 3.0:
+                    cands = cands[:1]
+                else:
+                    self._last_sweep[template_path] = now
+                # Alle Kandidaten prüfen und den BESTEN nehmen — nicht den ersten,
+                # der knapp über der Schwelle liegt (der kann daneben liegen).
+                for scale in cands:
+                    m = _match(scale)
+                    if m and m[0] > best[0]:
+                        best = m
+                    if m and scale == learned and m[0] >= max(confidence, 0.85):
+                        break               # gelernte Skalierung trifft sicher
 
             score, loc, scale, (tw, th) = best
             self._last_match = (score, scale)
@@ -2889,7 +2632,8 @@ class SkadiTerminalApp:
                     f"Match {template_path.name}: {score:.2f} (×{scale:.2f})  "
                     f"{'✔' if score >= confidence else f'✗ zu niedrig (min {confidence})'}")
             if loc is not None and score >= confidence:
-                if scale != learned:
+                # Nur eindeutige Treffer merken — sonst lernt er eine falsche Größe
+                if scale != learned and score >= 0.80:
                     self._remember_scale(template_path, sw, sh, scale)
                 return (loc[0] + tw // 2, loc[1] + th // 2)
         except Exception as e:
@@ -3064,15 +2808,10 @@ class SkadiTerminalApp:
         make_card(frm, "2. PICK-BUTTON  ('Auswählen')",
                   "Maus auf den 'AUSWÄHLEN' Button im Spiel hovern.",
                   AUSWAHL_TEMPLATE_PATH, PAL["str_col"], [])
-        make_card(frm, "3. PLANUNG  (Item-Phase Erkennung)",
+        make_card(frm, "3. PLANUNG  (Pick hat geklappt)",
                   "Maus auf den 'PLANUNG'-Schriftzug im Spiel hovern.",
                   PLANUNG_TEMPLATE_PATH, PAL["uni_col"], [])
-        make_card(frm, "4. NEUTRALE POSITION  (nach Item-Kauf)",
-                  "Leere Stelle im Shop hovern.\n"
-                  "Maus springt dorthin nach jedem Rechtsklick,\n"
-                  "damit Tooltips die nächsten Items nicht verdecken.",
-                  NEUTRAL_POS_PATH, PAL["agi_col"], [])
-        make_card(frm, "5. DOPPEL-PICK  (Phase D)",
+        make_card(frm, "4. DOPPEL-PICK  (Phase D)",
                   "Hinweis/Meldung hovern, die erscheint, wenn du und das\n"
                   "Gegnerteam denselben Helden genommen habt.\n"
                   "Optional: Ohne Template erkennt Phase D den Doppel-Pick daran,\n"
@@ -3275,7 +3014,6 @@ class SkadiTerminalApp:
         Phase A — Suchfeld finden → 2x klicken → 2s warten
         Phase B — Helden der Reihe nach: tippen → ENTER → Auswählen klicken
                   → auf PLANUNG warten (gefunden = Held ist gepickt)
-        Phase C — Items aus dem aktiven Set per Rechtsklick kaufen (einmalig)
         Phase D — Doppel-Pick-Prüfung: Haben wir und das Gegnerteam denselben
                   Helden genommen, wird der Pick zurückgesetzt. Dann geht es
                   mit Phase A + B ab dem NÄCHSTEN Helden der Liste weiter.
@@ -3286,23 +3024,17 @@ class SkadiTerminalApp:
             use_img    = pick_mode in ("image", "both") and CV2_AVAILABLE
             use_coords = pick_mode in ("coords", "both") and self._has_coords()
 
-            start        = 0
-            items_bought = False
+            start = 0
             while start < len(heroes) and not self.stop_pick.is_set():
                 if not self._phase_a_activate_field(use_img, use_coords):
                     break
-                picked_idx, planung = self._phase_b_pick(heroes, start, use_img, use_coords)
+                picked_idx, _planung = self._phase_b_pick(heroes, start, use_img, use_coords)
                 if self.stop_pick.is_set():
                     break
                 if picked_idx is None:
                     self._ui_status("✗ Kein Held aus der Liste konnte gepickt werden.")
                     return
                 hero = heroes[picked_idx]
-
-                if not items_bought:
-                    items_bought = self._phase_c_items(planung, use_img)
-                if self.stop_pick.is_set():
-                    break
 
                 if not self._phase_d_duplicate_watch(hero, use_img):
                     if not self.stop_pick.is_set():
@@ -3445,50 +3177,6 @@ class SkadiTerminalApp:
         if has_planung:
             self._save_debug_screenshot("planung")
         return None, False
-
-    # ── Phase C ───────────────────────────────────────────────────────
-    def _phase_c_items(self, planung_detected: bool, use_img: bool) -> bool:
-        """Kauft das aktive Item-Set. Rückgabe: True, wenn der Kauf gelaufen ist."""
-        if not self.cfg.get("item_phase_enabled", True):
-            self._ui_status("✔ Pick fertig. Item-Phase deaktiviert.")
-            return False
-        if not planung_detected or not use_img:
-            self._ui_status("✔ Pick fertig — PLANUNG nicht erkannt, keine Items.")
-            return False
-
-        self._ui_status("Phase C: PLANUNG erkannt — kaufe Items...")
-        self._sleep_interruptible(self.stop_pick, 0.5)
-
-        active_idx = self.cfg.get("active_item_set", 0)
-        item_sets  = self.cfg.get("item_sets", DEFAULT_CONFIG["item_sets"])
-        active_set = item_sets[active_idx] if active_idx < len(item_sets) else item_sets[0]
-        items      = active_set.get("items", [])
-
-        # Neutrale Position einmal suchen — Maus parkt dort nach jedem Kauf,
-        # damit Tooltips die nächsten Items nicht verdecken.
-        neutral = (self._find_on_screen(NEUTRAL_POS_PATH, 0.65, report=False)
-                   if NEUTRAL_POS_PATH.exists() else None)
-
-        for i, item_entry in enumerate(items):
-            if self.stop_pick.is_set(): break
-            item_path  = DATA_DIR / item_entry.get("file", _item_file(active_idx, i))
-            item_label = item_entry.get("label", f"Item {i+1}")
-            if not item_path.exists():
-                continue  # Kein Template → überspringen
-
-            self._ui_status(f"Phase C: suche {i+1}/{len(items)} — {item_label}")
-            item_pos = self._wait_for(item_path, 0.65, 3.0, poll=0.2)
-            if item_pos:
-                pyautogui.moveTo(*item_pos, duration=0.08)
-                pyautogui.click(button="right")   # RECHTSKLICK kauft
-                self._ui_status(f"Phase C: ✔ {item_label} gekauft (Rechtsklick)")
-                if neutral:
-                    pyautogui.moveTo(*neutral, duration=0.05)
-                time.sleep(0.3)
-            else:
-                self._ui_status(f"Phase C: ⚠ {item_label} nicht gefunden — übersprungen")
-                time.sleep(0.1)
-        return True
 
     # ── Phase D ───────────────────────────────────────────────────────
     def _phase_d_duplicate_watch(self, hero: str, use_img: bool, force: bool = False) -> bool:

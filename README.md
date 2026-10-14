@@ -29,15 +29,14 @@ Vom Wächter gestartet schließt sich SkadiTerminal 3 Minuten nach Spielende sel
 |---|---|
 | **A** | Wartet auf das Helden-Suchfeld (Bild) bzw. nutzt die kalibrierten Koordinaten und klickt 2x |
 | **B** | Tippt die Helden der Reihe nach, ENTER, klickt „Auswählen“, wartet auf PLANUNG |
-| **C** | Kauft das aktive Item-Set per Rechtsklick (einmal pro Match) |
 | **D** | **Doppel-Pick-Check:** Haben du und das Gegnerteam denselben Helden genommen, wird neu gepickt – mit dem nächsten Helden aus deiner Liste |
 
 Phase D erkennt den Doppel-Pick über
-1. das optionale Template `skadi_doppelt.png` (Konfiguration → Bild-Templates → Karte 5), oder
+1. das optionale Template `skadi_doppelt.png` (Konfiguration → Bild-Templates → Karte 4), oder
 2. Suchfeld wieder sichtbar **und** PLANUNG verschwunden.
 
 Prüfdauer einstellbar unter *Zeiten & Hotkey → Prüfdauer* (Standard 60 s),
-an/aus über den Button „Doppel-Check“ im Pick-Tab.
+an/aus über den Button „Doppel-Pick-Check“ im Pick-Tab.
 
 ## Testen
 
@@ -52,12 +51,12 @@ an/aus über den Button „Doppel-Check“ im Pick-Tab.
 
 ## Wo liegen Templates und Einstellungen?
 
-Im **Google Drive**, nicht neben der EXE – damit jeder PC dieselben Bilder, Presets und Item-Sets hat:
+Im **Google Drive**, nicht neben der EXE – damit jeder PC dieselben Bilder und Presets hat:
 
 ```
 <Laufwerk>:\Meine Ablage\_060_Projekte\_010_Aktiv\SkadiTerminal\
     skadi_field.png, skadi_auswahl.png, skadi_planung.png, …   (Templates)
-    skadi_config.json                                           (Presets, Item-Sets, Zeiten)
+    skadi_config.json                                           (Presets, Zeiten)
 ```
 
 Das Laufwerk (meist `G:`) sucht SkadiTerminal selbst. Die EXE kann irgendwo liegen.
@@ -77,11 +76,13 @@ und auf jedem PC automatisch bereitgestellt – auch ohne Google Drive.
 ## Automatisch starten, wenn Dota läuft (SkadiWaechter)
 
 `waechter/skadi_waechter.pyw` läuft unsichtbar im Hintergrund und startet SkadiTerminal,
-sobald `dota2.exe` (oder CS2 & Co.) läuft. SkadiTerminal schließt sich 3 Minuten nach Spielende selbst.
+sobald `dota2.exe` (oder CS2 & Co.) läuft – **einmal pro Spielsitzung**: Schließt du SkadiTerminal
+während des Spiels, bleibt es zu bis zum nächsten Spielstart. SkadiTerminal schließt sich 3 Minuten nach Spielende selbst.
 Welche Spiele zählen, steht in **Konfiguration → Spiele-Liste bearbeiten** (gespeichert in `skadi_config.json`);
 der Wächter liest dieselbe Liste alle 30 s neu. Dieselbe Liste schließt `Bild↑ + Bild↓` / „✕ Spiele“.
-Startet Dota, öffnet der Wächter außerdem **Discord** (falls nicht schon offen) – einmal pro Spielsitzung;
-abschalten: in `skadi_waechter.pyw` `DISCORD_WITH_GAMES = set()`.
+Startet Dota, öffnet der Wächter außerdem **Discord minimiert** (falls nicht schon offen) und
+**schließt Discord wieder, wenn Dota beendet wird**. Abschalten: in `skadi_waechter.pyw`
+`DISCORD_WITH_GAMES = set()` (gar nicht) bzw. `DISCORD_CLOSE_WITH_GAME = False` (nicht mitschließen).
 
 Der Wächter sucht SkadiTerminal in dieser Reihenfolge:
 1. im selben Ordner wie der Wächter (`SkadiTerminal.exe` / `skaditerminal.pyw`)
