@@ -414,6 +414,24 @@ _DEFAULT_POOL = [
     "invo","necro",
 ]
 
+def hero_search_term(name: str, all_names: list[str]) -> str:
+    """
+    Was ins Dota-Suchfeld getippt wird: der Anfang des vollen Heldennamens — mindestens
+    4 Buchstaben und so lang, dass KEIN anderer Held diese Buchstabenfolge im Namen hat.
+    Dota sucht nach Namensteilen; „pa" fände sonst auch Pangolier.
+    Beispiele: Phantom Assassin → „phantom a", Juggernaut → „jugg", Io → „io".
+    """
+    n = name.lower().strip()
+    others = [o.lower() for o in all_names if o and o.lower() != n]
+    for k in range(min(4, len(n)), len(n) + 1):
+        p = n[:k]
+        if p.endswith(" "):
+            continue
+        if not any(p in o for o in others):
+            return p
+    return n
+
+
 def _build_heroes(pool: list[str], custom: list[dict]) -> dict[str, list[tuple[str, str]]]:
     """Baut die Anzeige-Heroes aus dem Pool + eigenen Helden."""
     pool_set = set(p.lower() for p in pool)
@@ -1523,6 +1541,19 @@ class SkadiTerminalApp:
             self._hero_imgs[key] = img or tk.PhotoImage(width=size, height=size)
         return self._hero_imgs[key]
 
+    def _search_term(self, code: str) -> str:
+        """Suchbegriff für einen Helden: eigener Eintrag in der Config (search_terms) oder
+        automatisch eindeutig aus dem vollen Namen. Ohne bekannten Namen: das Kürzel."""
+        own = (self.cfg.get("search_terms") or {}).get(code)
+        if own:
+            return own
+        names = {c: n for lst in ALL_HEROES_MASTER.values() for c, n, *_ in lst}
+        for e in self.cfg.get("custom_heroes", []):
+            if e.get("code") and e.get("name"):
+                names.setdefault(e["code"], e["name"])
+        name = names.get(code)
+        return hero_search_term(name, list(names.values())) if name else code
+
     def _hover_name(self, widget, code: str, name: str):
         """Beim Überfahren den vollen Heldennamen in der Hinweiszeile zeigen.
         Bewusst KEIN Tooltip-Fenster: unter Windows lösen neu eingeblendete Fenster
@@ -1531,7 +1562,8 @@ class SkadiTerminalApp:
             n = len(self.cfg.get("hero_items", {}).get(code, []))
             extra = f"  ·  {n} Startitems" if n else ""
             try:
-                self._hero_hint.config(text=f"{name}  ({code}){extra}", fg=PAL["text"])
+                self._hero_hint.config(text=f"{name}  ·  tippt „{self._search_term(code)}“{extra}",
+                                       fg=PAL["text"])
             except tk.TclError:
                 pass
 
@@ -3550,13 +3582,14 @@ class SkadiTerminalApp:
             hero = heroes[idx]
             if not self._wait_game_focus():
                 return None, False
-            self._ui_status(f"Pick {idx+1}/{len(heroes)}: tippe '{hero}'  |  BACKSPACE = Stop")
+            term = self._search_term(hero)
+            self._ui_status(f"Pick {idx+1}/{len(heroes)}: tippe '{term}' ({hero})  |  BACKSPACE = Stop")
 
             # Tippen
-            ti = (type_duration / max(len(hero), 1)) * 0.55
+            ti = (type_duration / max(len(term), 1)) * 0.55
             ti = max(0.05, min(ti, 0.4))
-            pyautogui.write(hero, interval=ti)
-            rem = type_duration - ti * len(hero)
+            pyautogui.write(term, interval=ti)
+            rem = type_duration - ti * len(term)
             if rem > 0: self._sleep_interruptible(self.stop_pick, rem)
             if self.stop_pick.is_set(): return None, False
 

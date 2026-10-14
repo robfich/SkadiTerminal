@@ -44,6 +44,14 @@ kalibriert wurden – die Standardwerte klicken nicht mehr irgendwo ins Heldenra
 Prüfdauer einstellbar unter *Zeiten & Hotkey → Prüfdauer* (Standard 60 s),
 an/aus über den Button „Doppel-Pick-Check“ im Pick-Tab.
 
+## Was wird ins Suchfeld getippt?
+
+Nicht das Kürzel, sondern der **Anfang des vollen Heldennamens** – mindestens 4 Buchstaben und so lang,
+dass kein anderer Held diese Buchstabenfolge im Namen hat (Dota sucht nach Namensteilen, „pa“ fände
+sonst Pangolier). Beispiele: `pa` → „phantom a“, `pl` → „phantom l“, `sf` → „shadow f“, `wk` → „wrai“,
+`jugg` → „jugg“. Beim Überfahren eines Helden steht in der Hinweiszeile, was getippt wird.
+Eigene Begriffe sind in `skadi_config.json` unter `"search_terms": {"pa": "phantom assassin"}` möglich.
+
 ## Startitems pro Held (Drag & Drop)
 
 **Rechtsklick auf einen Helden → „Items hinzufügen …“** öffnet den Item-Editor:
