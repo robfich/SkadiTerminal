@@ -12,21 +12,38 @@ from tkinter import ttk, messagebox, filedialog
 import tkinter.font as tkfont
 
 import ctypes
-import pyautogui
-import psutil
-from pynput import keyboard
-import webbrowser
 
 # ──────────────────────────────────────────────────────────────────────────────
-# DPI-Awareness  (muss VOR allem anderen gesetzt werden)
+# DPI-Awareness — MUSS vor "import pyautogui" stehen!
+# pyautogui setzt beim Import sonst "System-DPI-aware", und das lässt sich danach
+# nicht mehr ändern. Folge: Wechselt danach die Auflösung/Skalierung (z. B. 125 % →
+# 100 % beim Umschalten auf 1920×1200), rechnet Windows alle Mauskoordinaten für
+# dieses Programm um — Bilderkennung findet den Button richtig, die Maus landet aber
+# bei ~80 % der Position. "Per-Monitor v2" arbeitet immer mit echten Pixeln.
 # ──────────────────────────────────────────────────────────────────────────────
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
-except Exception:
+def _set_dpi_awareness() -> str:
     try:
-        ctypes.windll.user32.SetProcessDPIAware()
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return "per-monitor-v2"
     except Exception:
         pass
+    try:
+        if ctypes.windll.shcore.SetProcessDpiAwareness(2) == 0:
+            return "per-monitor"
+    except Exception:
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+        return "system"
+    except Exception:
+        return "keine"
+
+DPI_MODE = _set_dpi_awareness() if os.name == "nt" else "-"
+
+import pyautogui                     # noqa: E402  (erst NACH der DPI-Einstellung!)
+import psutil                        # noqa: E402
+from pynput import keyboard          # noqa: E402
+import webbrowser                    # noqa: E402
 
 pyautogui.FAILSAFE = True
 
@@ -2541,6 +2558,7 @@ class SkadiTerminalApp:
                 debug_path = DATA_DIR / f"{_PREFIX}_debug_match.png"
                 cv2.imwrite(str(debug_path), debug_small)
 
+                results.append(f"Bildschirm {sw}×{sh}, DPI-Modus {DPI_MODE}")
                 msg = "  |  ".join(results) + f"  →  Debug: {debug_path.name}"
                 self.root.after(0, lambda m=msg: self.status_var.set(m))
 
@@ -3084,6 +3102,31 @@ class SkadiTerminalApp:
         finally:
             _release_screen()
 
+    def _move_exact(self, x: int, y: int, duration: float = 0.0):
+        """
+        Maus auf echte Bildschirmpixel (x, y) setzen — so, wie die Bilderkennung sie
+        sieht. Prüft danach die tatsächliche Position und korrigiert nach, falls Windows
+        die Koordinaten umrechnet (Skalierung hat sich seit dem Programmstart geändert).
+        """
+        pyautogui.moveTo(x, y, duration=duration)
+        if os.name != "nt" or x <= 0 or y <= 0:
+            return
+        try:
+            from ctypes import wintypes
+            pt = wintypes.POINT()
+            if not ctypes.windll.user32.GetPhysicalCursorPos(ctypes.byref(pt)):
+                return
+            if abs(pt.x - x) <= 3 and abs(pt.y - y) <= 3:
+                return
+            fx, fy = pt.x / x, pt.y / y            # tatsächlich / gewollt
+            if 0.3 < fx < 3 and 0.3 < fy < 3:
+                pyautogui.moveTo(round(x / fx), round(y / fy))
+                if not getattr(self, "_dpi_warned", False):
+                    self._dpi_warned = True
+                    self._ui_status(f"⚠ Windows-Skalierung geändert — Maus korrigiert (×{fx:.2f}/{fy:.2f})")
+        except Exception:
+            pass
+
     # ── Phase A ───────────────────────────────────────────────────────
     def _phase_a_activate_field(self, use_img: bool, use_coords: bool) -> bool:
         pos = None
@@ -3107,7 +3150,7 @@ class SkadiTerminalApp:
         if not self._wait_game_focus():
             return False
         self._ui_status("Pick: Suchfeld gefunden — klicke 2x")
-        pyautogui.moveTo(fx, fy, duration=0.10)
+        self._move_exact(fx, fy, 0.10)
         pyautogui.click(); time.sleep(self._t("field_click_delay", 0.15)); pyautogui.click()
 
         self._ui_status("Pick: Suchfeld aktiviert — warte 2s...")
@@ -3180,7 +3223,7 @@ class SkadiTerminalApp:
                 if not self._wait_game_focus():
                     return None, False
                 px, py = points[ci % len(points)]
-                pyautogui.moveTo(px, py, duration=0.04)
+                self._move_exact(px, py, 0.04)
                 pyautogui.click()
                 ci += 1
                 time.sleep(pick_interval)
@@ -3294,7 +3337,7 @@ class SkadiTerminalApp:
         def _do():
             try:
                 fx, fy = fp
-                pyautogui.moveTo(fx, fy, duration=0.1)
+                self._move_exact(fx, fy, 0.1)
                 pyautogui.click(); time.sleep(0.15); pyautogui.click()
                 self.root.after(0, lambda: self.status_var.set(f"Feld angeklickt (2x) bei ({fx},{fy})."))
             except pyautogui.FailSafeException:
