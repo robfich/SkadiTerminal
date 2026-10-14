@@ -52,8 +52,10 @@ echo  [3/5] Pakete installieren ...
 "%PY%" -m pip install --quiet --disable-pip-version-check --prefer-binary -r requirements.txt || goto :fehler
 
 echo  [4/5] EXEs bauen (dauert 1-2 Minuten) ...
+set "ADD_ITEMS="
+if exist "items\items.json" set ADD_ITEMS=--add-data "items;items"
 for /d %%d in ("%TEMP%\skadi_build_*") do rmdir /s /q "%%d" >nul 2>nul
-"%PY%" -m PyInstaller --noconfirm --log-level ERROR --workpath "%BUILD%\work" --distpath "%BUILD%\dist" --onefile --noconsole --name SkadiTerminal --icon skaditerminal.ico --add-data "skaditerminal.ico;." --add-data "templates;templates" skaditerminal.py || goto :fehler
+"%PY%" -m PyInstaller --noconfirm --log-level ERROR --workpath "%BUILD%\work" --distpath "%BUILD%\dist" --onefile --noconsole --name SkadiTerminal --icon skaditerminal.ico --add-data "skaditerminal.ico;." --add-data "templates;templates" %ADD_ITEMS% skaditerminal.py || goto :fehler
 "%PY%" -m PyInstaller --noconfirm --log-level ERROR --workpath "%BUILD%\work" --distpath "%BUILD%\dist" --onefile --noconsole --name SkadiWaechter --icon skaditerminal.ico waechter\skadi_waechter.pyw || goto :fehler
 
 echo  [5/5] Alte Version beenden und ersetzen ...
