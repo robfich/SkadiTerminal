@@ -3,9 +3,8 @@ SkadiTerminal-Wächter
 Läuft unsichtbar im Hintergrund (Autostart) und startet SkadiTerminal,
 sobald Dota 2 (oder ein anderes Spiel aus TARGET_GAMES) läuft — EINMAL pro Spielsitzung:
 Wer SkadiTerminal während des Spiels schließt, bekommt es erst beim nächsten Spielstart wieder.
-Startet außerdem Discord (minimiert), wenn Dota 2 startet, und schließt Discord wieder,
-wenn Dota 2 beendet wird.
-SkadiTerminal schließt sich selbst wieder, wenn 3 Minuten kein Spiel mehr läuft.
+Startet außerdem Discord (minimiert), wenn Dota 2 startet — Discord bleibt danach offen.
+Endet die Spielsitzung, schließt der Wächter SkadiTerminal (nur wenn er es selbst gestartet hat).
 """
 import os
 import sys
@@ -28,10 +27,9 @@ POLL_SECONDS = 2.0
 # (verhindert Neustarts, wenn ein Spiel kurz neu startet, z. B. nach einem Update)
 SESSION_END_POLLS = 3
 
-# Discord mitstarten (minimiert), wenn eines dieser Spiele startet, und wieder
-# schließen, wenn es beendet wird (leere Menge = aus)
+# Discord mitstarten (minimiert), wenn eines dieser Spiele startet (leere Menge = aus).
+# Discord wird NICHT wieder geschlossen.
 DISCORD_WITH_GAMES = {"dota2.exe"}
-DISCORD_CLOSE_WITH_GAME = True
 DISCORD_PROCS      = {"discord.exe", "discordcanary.exe", "discordptb.exe"}
 
 # Prozess-/Dateinamen, an denen ein laufendes Terminal erkannt wird
@@ -127,10 +125,18 @@ def start_discord() -> bool:
     return False
 
 
-def close_discord():
-    for p in psutil.process_iter(["name"]):
+def close_auto_terminals():
+    """Schließt SkadiTerminal, wenn es vom Wächter (mit --auto) gestartet wurde.
+    Von Hand gestartete Fenster bleiben offen."""
+    exe_names = {f"{n}.exe" for n in TERMINAL_NAMES}
+    for p in psutil.process_iter(["name", "cmdline"]):
         try:
-            if (p.info["name"] or "").lower() in DISCORD_PROCS:
+            name = (p.info["name"] or "").lower()
+            cmdline = [str(a).lower() for a in (p.info.get("cmdline") or [])]
+            is_terminal = name in exe_names or (
+                name in ("pythonw.exe", "python.exe")
+                and any(n in a for a in cmdline for n in TERMINAL_NAMES))
+            if is_terminal and "--auto" in cmdline:
                 p.terminate()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
@@ -183,7 +189,7 @@ def start_terminal(path: Path):
 
 def main():
     game_session    = Session()     # irgendein Spiel aus der Liste → SkadiTerminal
-    discord_session = Session()     # Dota → Discord an/aus
+    discord_session = Session()     # Dota-Start → Discord starten
     games, games_loaded = load_games(), time.time()
     while True:
         try:
@@ -193,18 +199,19 @@ def main():
 
             # SkadiTerminal: nur EINMAL beim Sitzungsbeginn starten. Wird es während
             # des Spiels geschlossen, bleibt es zu bis zum nächsten Spielstart.
-            if game_session.update(bool(names & games)) == "start":
+            event = game_session.update(bool(names & games))
+            if event == "start":
                 terminal = find_terminal()
                 if terminal and not terminal_already_running():
                     start_terminal(terminal)
+            elif event == "end":
+                close_auto_terminals()          # Spiel zu → SkadiTerminal zu (Discord bleibt)
 
-            # Discord: mit Dota starten (minimiert) und mit Dota wieder schließen
+            # Discord: mit Dota starten (minimiert); wird nicht wieder geschlossen
             if DISCORD_WITH_GAMES:
-                event = discord_session.update(bool(names & DISCORD_WITH_GAMES))
-                if event == "start" and not (names & DISCORD_PROCS):
+                if discord_session.update(bool(names & DISCORD_WITH_GAMES)) == "start" \
+                        and not (names & DISCORD_PROCS):
                     start_discord()
-                elif event == "end" and DISCORD_CLOSE_WITH_GAME:
-                    close_discord()
         except Exception:
             pass
         time.sleep(POLL_SECONDS)

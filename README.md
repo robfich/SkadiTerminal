@@ -21,7 +21,7 @@ Bilderkennung, Maus- und Tastatursteuerung brauchen den echten Bildschirm.
 sie nicht ins falsche Programm. Laufende Enter-/Taste-4-Makros pausieren außerhalb des Spiels.
 Stop, Steam/Discord schließen und Spiele schließen gehen **immer**, egal welches Fenster vorne ist.
 
-Vom Wächter gestartet schließt sich SkadiTerminal 3 Minuten nach Spielende selbst; von Hand gestartet bleibt es offen.
+Vom Wächter gestartet schließt sich SkadiTerminal, sobald das Spiel beendet ist; von Hand gestartet bleibt es offen.
 
 ## Pick-Makro (Taste `Ende`)
 
@@ -124,12 +124,13 @@ und auf jedem PC automatisch bereitgestellt – auch ohne Google Drive.
 
 `waechter/skadi_waechter.pyw` läuft unsichtbar im Hintergrund und startet SkadiTerminal,
 sobald `dota2.exe` (oder CS2 & Co.) läuft – **einmal pro Spielsitzung**: Schließt du SkadiTerminal
-während des Spiels, bleibt es zu bis zum nächsten Spielstart. SkadiTerminal schließt sich 3 Minuten nach Spielende selbst.
+während des Spiels, bleibt es zu bis zum nächsten Spielstart. Spiel zu = SkadiTerminal zu.
 Welche Spiele zählen, steht in **Konfiguration → Spiele-Liste bearbeiten** (gespeichert in `skadi_config.json`);
 der Wächter liest dieselbe Liste alle 30 s neu. Dieselbe Liste schließt `Bild↑ + Bild↓` / „✕ Spiele“.
-Startet Dota, öffnet der Wächter außerdem **Discord minimiert** (falls nicht schon offen) und
-**schließt Discord wieder, wenn Dota beendet wird**. Abschalten: in `skadi_waechter.pyw`
-`DISCORD_WITH_GAMES = set()` (gar nicht) bzw. `DISCORD_CLOSE_WITH_GAME = False` (nicht mitschließen).
+Startet Dota, öffnet der Wächter außerdem **Discord minimiert** (falls nicht schon offen); Discord
+bleibt danach offen. Abschalten: in `skadi_waechter.pyw` `DISCORD_WITH_GAMES = set()`.
+**Endet das Spiel, schließt der Wächter SkadiTerminal** (nur wenn er es selbst gestartet hat –
+von Hand geöffnet bleibt es offen).
 
 Der Wächter sucht SkadiTerminal in dieser Reihenfolge:
 1. im selben Ordner wie der Wächter (`SkadiTerminal.exe` / `skaditerminal.pyw`)
