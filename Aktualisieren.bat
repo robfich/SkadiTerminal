@@ -10,6 +10,9 @@ set "REPO=https://github.com/robfich/SkadiTerminal"
 set "ZIP_URL=%REPO%/archive/refs/heads/main.zip"
 set "TARGET=%~dp0"
 set "WORK=%LOCALAPPDATA%\SkadiTerminal\quelle"
+REM Jeder Lauf baut in eigenen, frischen Ordnern - gesperrte Reste alter Laeufe stoeren so nicht
+set "RUNID=%RANDOM%%RANDOM%"
+set "BUILD=%TEMP%\skadi_build_%RUNID%"
 
 echo.
 echo  [1/5] Python pruefen ...
@@ -33,10 +36,12 @@ if exist "%WORK%\.git" (
 goto :bauen
 
 :zip
-echo        ^(git nicht gefunden - lade ZIP^)
-if exist "%WORK%" rmdir /s /q "%WORK%"
+echo        ^(git nicht gefunden - lade ZIP, das ist in Ordnung^)
+REM Reste alter Laeufe wegraeumen, so weit moeglich (gesperrte Dateien werden uebersprungen)
+for /d %%d in ("%LOCALAPPDATA%\SkadiTerminal\quelle_*") do rmdir /s /q "%%d" >nul 2>nul
+set "WORK=%LOCALAPPDATA%\SkadiTerminal\quelle_%RUNID%"
 mkdir "%WORK%" 2>nul
-powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $z=Join-Path $env:TEMP 'skadi_main.zip'; Invoke-WebRequest '%ZIP_URL%' -OutFile $z; $t=Join-Path $env:TEMP 'skadi_unzip'; if(Test-Path $t){Remove-Item $t -Recurse -Force}; Expand-Archive $z $t; Copy-Item (Join-Path $t 'SkadiTerminal-main\*') '%WORK%' -Recurse -Force; Remove-Item $z,$t -Recurse -Force" || goto :fehler
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $z=Join-Path $env:TEMP 'skadi_main_%RUNID%.zip'; Invoke-WebRequest '%ZIP_URL%' -OutFile $z; $t=Join-Path $env:TEMP 'skadi_unzip_%RUNID%'; Expand-Archive $z $t; Copy-Item (Join-Path $t 'SkadiTerminal-main\*') '%WORK%' -Recurse -Force; Remove-Item $z,$t -Recurse -Force" || goto :fehler
 
 :bauen
 cd /d "%WORK%"
@@ -44,22 +49,24 @@ echo  [3/5] Pakete installieren ...
 "%PY%" -m pip install --quiet --disable-pip-version-check --prefer-binary -r requirements.txt || goto :fehler
 
 echo  [4/5] EXEs bauen (dauert 1-2 Minuten) ...
-if exist dist rmdir /s /q dist
-"%PY%" -m PyInstaller --noconfirm --log-level ERROR --onefile --noconsole --name SkadiTerminal --icon skaditerminal.ico --add-data "skaditerminal.ico;." --add-data "templates;templates" skaditerminal.py || goto :fehler
-"%PY%" -m PyInstaller --noconfirm --log-level ERROR --onefile --noconsole --name SkadiWaechter --icon skaditerminal.ico waechter\skadi_waechter.pyw || goto :fehler
+for /d %%d in ("%TEMP%\skadi_build_*") do rmdir /s /q "%%d" >nul 2>nul
+"%PY%" -m PyInstaller --noconfirm --log-level ERROR --workpath "%BUILD%\work" --distpath "%BUILD%\dist" --onefile --noconsole --name SkadiTerminal --icon skaditerminal.ico --add-data "skaditerminal.ico;." --add-data "templates;templates" skaditerminal.py || goto :fehler
+"%PY%" -m PyInstaller --noconfirm --log-level ERROR --workpath "%BUILD%\work" --distpath "%BUILD%\dist" --onefile --noconsole --name SkadiWaechter --icon skaditerminal.ico waechter\skadi_waechter.pyw || goto :fehler
 
 echo  [5/5] Alte Version beenden und ersetzen ...
 taskkill /IM SkadiWaechter.exe /F >nul 2>nul
 taskkill /IM SkadiTerminal.exe /F >nul 2>nul
 timeout /t 2 /nobreak >nul
-copy /Y "dist\SkadiTerminal.exe" "%TARGET%" >nul || goto :fehler
-copy /Y "dist\SkadiWaechter.exe" "%TARGET%" >nul || goto :fehler
+copy /Y "%BUILD%\dist\SkadiTerminal.exe" "%TARGET%" >nul || goto :fehler
+copy /Y "%BUILD%\dist\SkadiWaechter.exe" "%TARGET%" >nul || goto :fehler
 copy /Y "waechter\Autostart_einrichten.bat" "%TARGET%" >nul
 copy /Y "Einrichten.bat" "%TARGET%" >nul
 REM Neue Aktualisieren.bat nur ablegen, wenn sie sich unterscheidet (laufende .bat darf sich nicht selbst ersetzen)
 fc /b "Aktualisieren.bat" "%~f0" >nul 2>nul && (del "%TARGET%Aktualisieren.neu.bat" >nul 2>nul) || (copy /Y "Aktualisieren.bat" "%TARGET%Aktualisieren.neu.bat" >nul & echo  Hinweis: Neue Aktualisieren.bat liegt als Aktualisieren.neu.bat bereit - alte loeschen, neue umbenennen.)
 
 start "" "%TARGET%SkadiWaechter.exe"
+cd /d "%TARGET%"
+rmdir /s /q "%BUILD%" >nul 2>nul
 echo.
 echo  FERTIG - SkadiTerminal und SkadiWaechter sind aktuell.
 echo  Ordner: %TARGET%
