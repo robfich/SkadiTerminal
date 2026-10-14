@@ -15,7 +15,7 @@ echo.
 echo  [1/5] Python pruefen ...
 call :findpy
 if not defined PY (
-  echo  FEHLER: Python ist nicht installiert.
+  echo  FEHLER: Python 3.12 ist nicht installiert.
   echo  Bitte zuerst Einrichten.bat ausfuehren ^(installiert Python und alle Pakete^).
   goto :fehler
 )
@@ -41,7 +41,7 @@ powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $z=Join-Path $env
 :bauen
 cd /d "%WORK%"
 echo  [3/5] Pakete installieren ...
-"%PY%" -m pip install --quiet --disable-pip-version-check -r requirements.txt || goto :fehler
+"%PY%" -m pip install --quiet --disable-pip-version-check --prefer-binary -r requirements.txt || goto :fehler
 
 echo  [4/5] EXEs bauen (dauert 1-2 Minuten) ...
 if exist dist rmdir /s /q dist
@@ -75,11 +75,10 @@ echo.
 pause
 exit /b 1
 
-REM --- Echtes Python suchen (der Microsoft-Store-Platzhalter "python" zaehlt nicht) ---
+REM --- Python 3.12 suchen (dafuer gibt es fertige Pakete fuer alles; andere Versionen werden ignoriert) ---
 :findpy
 set "PY="
-for /f "delims=" %%i in ('py -3 -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
-if not defined PY for /f "delims=" %%i in ('python -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
-if not defined PY for /d %%d in ("%LOCALAPPDATA%\Programs\Python\Python3*") do if exist "%%d\python.exe" set "PY=%%d\python.exe"
-if not defined PY for /d %%d in ("%ProgramFiles%\Python3*") do if exist "%%d\python.exe" set "PY=%%d\python.exe"
+for /f "delims=" %%i in ('py -3.12 -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined PY if exist "%ProgramFiles%\Python312\python.exe" set "PY=%ProgramFiles%\Python312\python.exe"
 exit /b 0

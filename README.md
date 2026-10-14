@@ -95,7 +95,7 @@ Der Wächter sucht SkadiTerminal in dieser Reihenfolge:
 
 ## Einrichten (einmalig pro PC)
 
-`Einrichten.bat` doppelklicken: installiert Python 3.12 (per `winget`, ohne Admin) und alle Pakete
+`Einrichten.bat` doppelklicken: installiert Python 3.12 (per `winget`, ohne Admin; andere Python-Versionen bleiben unberührt und werden ignoriert, weil es für sie nicht immer fertige Pakete gibt) und alle Pakete
 (`pyautogui`, `opencv-python`, `mss`, `pynput`, `pyinstaller`, …) und startet danach auf Wunsch `Aktualisieren.bat`.
 Der Microsoft-Store-Platzhalter für `python` wird erkannt und übergangen.
 

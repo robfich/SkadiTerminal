@@ -10,7 +10,7 @@ REM  Einfach doppelklicken. Mehrfach ausfuehren schadet nicht.
 REM ==================================================================
 
 echo.
-echo  [1/3] Python suchen ...
+echo  [1/3] Python 3.12 suchen ...
 call :findpy
 if not defined PY goto :installieren
 echo        gefunden: %PY%
@@ -23,7 +23,7 @@ where winget >nul 2>nul
 if errorlevel 1 (
   echo.
   echo  FEHLER: winget fehlt ^(App-Installer aus dem Microsoft Store^).
-  echo  Python bitte von Hand installieren: https://www.python.org/downloads/
+  echo  Python 3.12 bitte von Hand installieren: https://www.python.org/downloads/release/python-31210/
   echo  Wichtig: beim Installieren den Haken bei "Add python.exe to PATH" setzen.
   goto :fehler
 )
@@ -31,7 +31,7 @@ winget install -e --id Python.Python.3.12 --scope user --silent --accept-package
 call :findpy
 if not defined PY (
   echo.
-  echo  FEHLER: Python wurde installiert, aber nicht gefunden.
+  echo  FEHLER: Python 3.12 wurde installiert, aber nicht gefunden.
   echo  Bitte dieses Fenster schliessen und Einrichten.bat noch einmal starten.
   goto :fehler
 )
@@ -43,7 +43,7 @@ echo  [2/3] pip aktualisieren ...
 "%PY%" -m pip install --quiet --upgrade pip || goto :fehler
 
 echo  [3/3] Pakete installieren ^(dauert 1-2 Minuten^) ...
-"%PY%" -m pip install --upgrade pyautogui pillow psutil pynput opencv-python numpy mss pyinstaller || goto :fehler
+"%PY%" -m pip install --upgrade --prefer-binary pyautogui pillow psutil pynput opencv-python numpy mss pyinstaller || goto :fehler
 
 echo.
 echo  FERTIG - alle Voraussetzungen sind installiert.
@@ -66,11 +66,10 @@ echo.
 pause
 exit /b 1
 
-REM --- Echtes Python suchen (der Microsoft-Store-Platzhalter "python" zaehlt nicht) ---
+REM --- Python 3.12 suchen (dafuer gibt es fertige Pakete fuer alles; andere Versionen werden ignoriert) ---
 :findpy
 set "PY="
-for /f "delims=" %%i in ('py -3 -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
-if not defined PY for /f "delims=" %%i in ('python -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
-if not defined PY for /d %%d in ("%LOCALAPPDATA%\Programs\Python\Python3*") do if exist "%%d\python.exe" set "PY=%%d\python.exe"
-if not defined PY for /d %%d in ("%ProgramFiles%\Python3*") do if exist "%%d\python.exe" set "PY=%%d\python.exe"
+for /f "delims=" %%i in ('py -3.12 -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined PY if exist "%ProgramFiles%\Python312\python.exe" set "PY=%ProgramFiles%\Python312\python.exe"
 exit /b 0
