@@ -1525,9 +1525,33 @@ class SkadiTerminalApp:
 
     def _tooltip(self, widget, text: str):
         """Kleiner Hinweis (z. B. voller Heldenname) beim Überfahren mit der Maus."""
-        def _show(e):
-            _hide(None)
+        pending = {"id": None}
+
+        def _hide(_e=None):
+            if pending["id"] is not None:
+                try:
+                    widget.after_cancel(pending["id"])
+                except tk.TclError:
+                    pass
+                pending["id"] = None
+            if self._tip_win is not None:
+                try:
+                    self._tip_win.destroy()
+                except tk.TclError:
+                    pass
+                self._tip_win = None
+
+        def _show():
+            pending["id"] = None
+            try:
+                x, y = widget.winfo_pointerxy()            # aktuelle Mausposition
+                if widget.winfo_containing(x, y) is not widget:
+                    return
+            except tk.TclError:
+                return
+            _hide()
             tip = tk.Toplevel(widget)
+            tip.withdraw()                                 # erst fertig bauen, dann zeigen
             tip.overrideredirect(True)
             try:
                 tip.attributes("-topmost", True)
@@ -1536,20 +1560,15 @@ class SkadiTerminalApp:
             tk.Label(tip, text=text, bg=PAL["surface2"], fg=PAL["text"], font=self._fonts["small"],
                      padx=6, pady=2, highlightthickness=1,
                      highlightbackground=PAL["separator"]).pack()
-            tip.geometry(f"+{e.x_root + 12}+{e.y_root + 14}")
+            tip.geometry(f"+{x + 12}+{y + 14}")
+            tip.deiconify()
             self._tip_win = tip
 
-        def _hide(_e):
-            if self._tip_win is not None:
-                try:
-                    self._tip_win.destroy()
-                except tk.TclError:
-                    pass
-                self._tip_win = None
+        def _enter(_e):
+            _hide()
+            pending["id"] = widget.after(450, _show)
 
-        widget.bind("<Enter>", lambda e: widget.after(350, lambda: _show(e)
-                                                       if widget.winfo_containing(e.x_root, e.y_root) is widget
-                                                       else None), add="+")
+        widget.bind("<Enter>", _enter, add="+")
         widget.bind("<Leave>", _hide, add="+")
         widget.bind("<ButtonPress>", _hide, add="+")
 
@@ -1737,6 +1756,7 @@ class SkadiTerminalApp:
                 return
             if drag["ghost"] is None:
                 g = tk.Toplevel(win)
+                g.withdraw()
                 g.overrideredirect(True)
                 try:
                     g.attributes("-topmost", True)
@@ -1744,6 +1764,8 @@ class SkadiTerminalApp:
                 except tk.TclError:
                     pass
                 tk.Label(g, image=icons.get(drag["key"]), bd=0, bg=PAL["accent"]).pack()
+                g.geometry(f"+{event.x_root - 30}+{event.y_root - 20}")
+                g.deiconify()
                 drag["ghost"] = g
             drag["moved"] = True
             drag["ghost"].geometry(f"+{event.x_root - 30}+{event.y_root - 20}")
@@ -3920,7 +3942,16 @@ def main():
         _orig_init(self, master, **kw)
         try: _apply_icon(self)
         except Exception: pass
-        set_titlebar_dark(self, THEME_IS_DARK[0])
+        # Titelleiste erst einfärben, wenn Tk wieder Zeit hat — NICHT sofort: set_titlebar_dark
+        # zeigt das Fenster dabei an, und rahmenlose Fenster (Tooltips, Drag-Bild) würden
+        # sonst kurz als kleines Fenster mit Titelleiste aufblitzen.
+        def _dark():
+            try:
+                if self.winfo_exists() and not self.overrideredirect():
+                    set_titlebar_dark(self, THEME_IS_DARK[0])
+            except tk.TclError:
+                pass
+        self.after_idle(_dark)
     tk.Toplevel.__init__ = _patched_init
 
     app = SkadiTerminalApp(root)
