@@ -13,10 +13,10 @@ set "WORK=%LOCALAPPDATA%\SkadiTerminal\quelle"
 
 echo.
 echo  [1/5] Python pruefen ...
-where python >nul 2>nul
-if errorlevel 1 (
-  echo  FEHLER: Python ist nicht installiert oder nicht im PATH.
-  echo  Bitte installieren: https://www.python.org/downloads/  ^(Haken bei "Add to PATH"^)
+call :findpy
+if not defined PY (
+  echo  FEHLER: Python ist nicht installiert.
+  echo  Bitte zuerst Einrichten.bat ausfuehren ^(installiert Python und alle Pakete^).
   goto :fehler
 )
 
@@ -41,12 +41,12 @@ powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $z=Join-Path $env
 :bauen
 cd /d "%WORK%"
 echo  [3/5] Pakete installieren ...
-python -m pip install --quiet --disable-pip-version-check -r requirements.txt || goto :fehler
+"%PY%" -m pip install --quiet --disable-pip-version-check -r requirements.txt || goto :fehler
 
 echo  [4/5] EXEs bauen (dauert 1-2 Minuten) ...
 if exist dist rmdir /s /q dist
-python -m PyInstaller --noconfirm --log-level ERROR --onefile --noconsole --name SkadiTerminal --icon skaditerminal.ico --add-data "skaditerminal.ico;." --add-data "templates;templates" skaditerminal.py || goto :fehler
-python -m PyInstaller --noconfirm --log-level ERROR --onefile --noconsole --name SkadiWaechter --icon skaditerminal.ico waechter\skadi_waechter.pyw || goto :fehler
+"%PY%" -m PyInstaller --noconfirm --log-level ERROR --onefile --noconsole --name SkadiTerminal --icon skaditerminal.ico --add-data "skaditerminal.ico;." --add-data "templates;templates" skaditerminal.py || goto :fehler
+"%PY%" -m PyInstaller --noconfirm --log-level ERROR --onefile --noconsole --name SkadiWaechter --icon skaditerminal.ico waechter\skadi_waechter.pyw || goto :fehler
 
 echo  [5/5] Alte Version beenden und ersetzen ...
 taskkill /IM SkadiWaechter.exe /F >nul 2>nul
@@ -55,6 +55,7 @@ timeout /t 2 /nobreak >nul
 copy /Y "dist\SkadiTerminal.exe" "%TARGET%" >nul || goto :fehler
 copy /Y "dist\SkadiWaechter.exe" "%TARGET%" >nul || goto :fehler
 copy /Y "waechter\Autostart_einrichten.bat" "%TARGET%" >nul
+copy /Y "Einrichten.bat" "%TARGET%" >nul
 REM Neue Aktualisieren.bat nur ablegen, wenn sie sich unterscheidet (laufende .bat darf sich nicht selbst ersetzen)
 fc /b "Aktualisieren.bat" "%~f0" >nul 2>nul && (del "%TARGET%Aktualisieren.neu.bat" >nul 2>nul) || (copy /Y "Aktualisieren.bat" "%TARGET%Aktualisieren.neu.bat" >nul & echo  Hinweis: Neue Aktualisieren.bat liegt als Aktualisieren.neu.bat bereit - alte loeschen, neue umbenennen.)
 
@@ -73,3 +74,12 @@ echo  Aktualisierung abgebrochen - siehe Meldung oben. Die alte Version bleibt u
 echo.
 pause
 exit /b 1
+
+REM --- Echtes Python suchen (der Microsoft-Store-Platzhalter "python" zaehlt nicht) ---
+:findpy
+set "PY="
+for /f "delims=" %%i in ('py -3 -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
+if not defined PY for /f "delims=" %%i in ('python -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
+if not defined PY for /d %%d in ("%LOCALAPPDATA%\Programs\Python\Python3*") do if exist "%%d\python.exe" set "PY=%%d\python.exe"
+if not defined PY for /d %%d in ("%ProgramFiles%\Python3*") do if exist "%%d\python.exe" set "PY=%%d\python.exe"
+exit /b 0

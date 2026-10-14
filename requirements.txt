@@ -1,4 +1,5 @@
 pyautogui
+pillow
 psutil
 pynput
 opencv-python

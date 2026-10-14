@@ -93,6 +93,12 @@ Der Wächter sucht SkadiTerminal in dieser Reihenfolge:
 `Autostart_einrichten.bat` doppelklicken. Den alten `Prozesswatcher` aus dem Autostart entfernen
 (`Win + R` → `shell:startup` → Verknüpfung löschen).
 
+## Einrichten (einmalig pro PC)
+
+`Einrichten.bat` doppelklicken: installiert Python 3.12 (per `winget`, ohne Admin) und alle Pakete
+(`pyautogui`, `opencv-python`, `mss`, `pynput`, `pyinstaller`, …) und startet danach auf Wunsch `Aktualisieren.bat`.
+Der Microsoft-Store-Platzhalter für `python` wird erkannt und übergangen.
+
 ## Aktualisieren (ein Doppelklick)
 
 `Aktualisieren.bat` neben `SkadiTerminal.exe` / `SkadiWaechter.exe` legen und doppelklicken:
@@ -101,7 +107,7 @@ Der Wächter sucht SkadiTerminal in dieser Reihenfolge:
 2. installiert die Pakete und baut beide EXEs
 3. beendet die laufenden Programme, ersetzt die EXEs im Ordner der `.bat` und startet den Wächter neu
 
-Templates, Config und Presets im Datenordner bleiben unberührt. Voraussetzung: Python ist installiert.
+Templates, Config und Presets im Datenordner bleiben unberührt. Voraussetzung: einmal `Einrichten.bat` ausgeführt.
 Ist eine neuere `Aktualisieren.bat` dabei, liegt sie danach als `Aktualisieren.neu.bat` daneben.
 
 ## Bauen
