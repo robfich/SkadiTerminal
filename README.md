@@ -63,8 +63,9 @@ Neue Items: Bild nach `items/<key>.png`, oberen Teil nach `items/match/<key>.png
 
 ## Helden-Icons
 
-Im Helden-Raster steht vor jedem Kürzel das Minimap-Icon des Helden, der volle Name erscheint beim
-Überfahren mit der Maus. Die Icons stammen aus
+Im Helden-Raster, im Held-Pool und in der Startitem-Auswahl steht vor jedem Kürzel das Minimap-Icon;
+der volle Name erscheint beim Überfahren in der Hinweiszeile über den Presets (bewusst ohne
+Tooltip-Fenster – die blitzten unter Windows ständig auf). Die Icons stammen aus
 [bontscho/dota2-minimap-hero-sprites](https://github.com/bontscho/dota2-minimap-hero-sprites) (MIT,
 Bilder © Valve) und liegen in `items/heroes/<kürzel>.png`. Neuere Helden, die dort fehlen
 (Primal Beast, Muerta, Marci, Kez, Ringmaster, Largo), werden ohne Icon angezeigt.

@@ -903,7 +903,6 @@ class SkadiTerminalApp:
         self.selected_heroes: list[str] = list(self.cfg.get("last_selection", []))[:8]
         self.hero_buttons:    dict[str, tk.Button] = {}
         self._hero_imgs:      dict[tuple[str, int], tk.PhotoImage] = {}
-        self._tip_win = None
         self.pressed_keys     = set()
         self.kill_combo_armed = False
         self.close_apps_armed = False
@@ -1054,9 +1053,10 @@ class SkadiTerminalApp:
         self._items_btn.grid(row=0, column=0, sticky="ew", padx=(0, 2))
         self._doppel_btn = self._toggle_btn(toggle_row, lambda: _toggle("doppel_check_enabled"))
         self._doppel_btn.grid(row=0, column=1, sticky="ew", padx=(2, 0))
-        tk.Label(toggle_row, text="Rechtsklick auf einen Helden = Startitems festlegen  (• = hat Items)",
-                 bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["small"], anchor="w"
-                 ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+        self._hero_hint_default = "Rechtsklick auf einen Helden = Startitems festlegen  (• = hat Items)"
+        self._hero_hint = tk.Label(toggle_row, text=self._hero_hint_default,
+                                   bg=PAL["surface"], fg=PAL["text_dim"], font=self._fonts["small"], anchor="w")
+        self._hero_hint.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
 
         def _update_toggles():
             for btn, key, label in ((self._items_btn,  "item_buy_enabled",     "Startitems kaufen"),
@@ -1165,6 +1165,14 @@ class SkadiTerminalApp:
                   ).grid(row=0, column=2, sticky="ew", padx=(2, 0))
         cfg_row += 1
 
+        cfg_header("HELDEN & ITEMS")
+        cfg_buttons([
+            ("Held-Pool verwalten",        self.open_hero_pool_manager),
+            ("Startitems bearbeiten …",    self.open_item_hero_chooser),
+            ("Eigenen Held hinzufügen",    self.open_hero_manager),
+            ("Zeiten & Hotkey",            self.open_timing_config),
+        ])
+
         cfg_header("ERKENNUNG")
         self._mode_var = tk.StringVar(value=self.cfg.get("pick_mode", "both"))
         mode_row = tk.Frame(tab_cfg, bg=PAL["surface"])
@@ -1174,7 +1182,7 @@ class SkadiTerminalApp:
                  font=self._fonts["ui"]).pack(side="left", padx=(0, 6))
         mode_inner = tk.Frame(mode_row, bg=PAL["separator"], padx=1, pady=1)
         mode_inner.pack(side="left")
-        tk.Label(mode_row, text="Bild = Templates · Koord. = F8-Punkte", bg=PAL["surface"],
+        tk.Label(mode_row, text="Bild = Vorlagen · Koord. = F8-Punkte", bg=PAL["surface"],
                  fg=PAL["text_dim"], font=self._fonts["small"]).pack(side="left", padx=(8, 0))
 
         def _set_mode(val):
@@ -1203,40 +1211,18 @@ class SkadiTerminalApp:
         self._refresh_mode_buttons = _refresh_mode_buttons
 
         cfg_buttons([
-            ("Bild-Templates erfassen",      self.open_image_calib_dialog),
+            ("Bild-Vorlagen aufnehmen",      self.open_image_calib_dialog),
             ("Erkennung testen",             self.test_image_recognition),
-            ("Doppel-Pick-Test",             self.test_doppel_check),
             ("Koordinaten kalibrieren (F8)", self.start_calibration),
+            ("Doppel-Pick-Test",             self.test_doppel_check),
             ("Skalierung neu lernen",        self.reset_learned_scales),
+            ("Alte Vorlagen importieren …",  self.import_templates),
         ])
 
-        cfg_header("PICK")
-        cfg_buttons([
-            ("Zeiten & Hotkey",          self.open_timing_config),
-            ("Held-Pool verwalten",      self.open_hero_pool_manager),
-            ("Spiele-Liste bearbeiten",  self.open_games_editor),
-            ("Eigenen Held hinzufügen",  self.open_hero_manager),
-        ])
-
-        cfg_header("ANZEIGE")
-        self.theme_btn = self._btn(tab_cfg, "", self.toggle_theme)
-        self.theme_btn.grid(row=cfg_row, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.font_btn = self._btn(tab_cfg, "", self.toggle_font_scale)
-        self.font_btn.grid(row=cfg_row, column=1, sticky="ew", padx=(2, 0), pady=2)
-        self._update_display_btns()
-        cfg_row += 1
-
-        cfg_header("STRATZ")
-        cfg_buttons([(name, lambda u=url: webbrowser.open(u)) for name, url in [
-            ("Robert", "https://stratz.com/players/44216623"),
-            ("Jan",    "https://stratz.com/players/20846181"),
-            ("Ben",    "https://stratz.com/players/314442285"),
-        ]])
-
-        cfg_header("STATUS")
-        self._cfg_mode_label = tk.Label(tab_cfg, text="", bg=PAL["surface"], fg=PAL["text"],
-                                        font=self._fonts["mono"], anchor="w", justify="left")
-        self._cfg_mode_label.grid(row=cfg_row, column=0, columnspan=2, sticky="ew")
+        self._cfg_mode_label = tk.Label(tab_cfg, text="", bg=PAL["surface2"], fg=PAL["text"],
+                                        font=self._fonts["mono"], anchor="w", justify="left",
+                                        padx=8, pady=4)
+        self._cfg_mode_label.grid(row=cfg_row, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         cfg_row += 1
 
         def _update_cfg_mode_label(*_):
@@ -1249,9 +1235,10 @@ class SkadiTerminalApp:
             lines = [
                 f"Suchfeld        {tpl(FIELD_TEMPLATE_PATH)}",
                 f"Auswählen       {tpl(AUSWAHL_TEMPLATE_PATH)}",
-                f"Planung         {tpl(PLANUNG_TEMPLATE_PATH)}",
+                f"Planung         {tpl(PLANUNG_TEMPLATE_PATH, '– optional (Shop reicht)')}",
                 f"Doppel-Pick     {tpl(DOPPELT_TEMPLATE_PATH, '– optional')}",
-                f"Koordinaten     {ok(self._has_coords(), '✕ nicht kalibriert')}",
+                f"Item-Bilder     {ok(bool(ITEM_CATALOG), '✕ fehlen')}",
+                f"Koordinaten     {ok(self._has_coords(), '– nicht kalibriert')}",
             ]
             self._cfg_mode_label.config(text="\n".join(lines))
 
@@ -1259,14 +1246,27 @@ class SkadiTerminalApp:
         self._update_cfg_mode_label = _update_cfg_mode_label
         self._on_tab_change = _update_cfg_mode_label
 
-        tk.Label(tab_cfg, text=f"Datenordner (Templates, Config): {DATA_DIR}", bg=PAL["surface"], fg=PAL["text_dim"],
-                 font=self._fonts["small"], anchor="w", justify="left", wraplength=420
-                 ).grid(row=cfg_row, column=0, columnspan=2, sticky="ew", pady=(6, 2))
-        cfg_row += 1
+        cfg_header("SYSTEM")
         cfg_buttons([
-            ("Alte Templates importieren …", self.import_templates),
-            ("Datenordner öffnen",           lambda: open_folder(str(DATA_DIR))),
+            ("Spiele-Liste bearbeiten",  self.open_games_editor),
+            ("Datenordner öffnen",       lambda: open_folder(str(DATA_DIR))),
         ])
+        tk.Label(tab_cfg, text=f"Datenordner: {DATA_DIR}", bg=PAL["surface"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="w", justify="left", wraplength=440
+                 ).grid(row=cfg_row, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        cfg_row += 1
+
+        cfg_header("STRATZ")
+        stratz = tk.Frame(tab_cfg, bg=PAL["surface"])
+        stratz.grid(row=cfg_row, column=0, columnspan=2, sticky="ew")
+        stratz.columnconfigure((0, 1, 2), weight=1, uniform="stratz")
+        for col, (name, url) in enumerate([
+                ("Robert", "https://stratz.com/players/44216623"),
+                ("Jan",    "https://stratz.com/players/20846181"),
+                ("Ben",    "https://stratz.com/players/314442285")]):
+            self._btn(stratz, name, lambda u=url: webbrowser.open(u)).grid(
+                row=0, column=col, sticky="ew", padx=(0 if col == 0 else 2, 0 if col == 2 else 2))
+        cfg_row += 1
 
         _select_tab(0)
 
@@ -1523,54 +1523,25 @@ class SkadiTerminalApp:
             self._hero_imgs[key] = img or tk.PhotoImage(width=size, height=size)
         return self._hero_imgs[key]
 
-    def _tooltip(self, widget, text: str):
-        """Kleiner Hinweis (z. B. voller Heldenname) beim Überfahren mit der Maus."""
-        pending = {"id": None}
-
-        def _hide(_e=None):
-            if pending["id"] is not None:
-                try:
-                    widget.after_cancel(pending["id"])
-                except tk.TclError:
-                    pass
-                pending["id"] = None
-            if self._tip_win is not None:
-                try:
-                    self._tip_win.destroy()
-                except tk.TclError:
-                    pass
-                self._tip_win = None
-
-        def _show():
-            pending["id"] = None
+    def _hover_name(self, widget, code: str, name: str):
+        """Beim Überfahren den vollen Heldennamen in der Hinweiszeile zeigen.
+        Bewusst KEIN Tooltip-Fenster: unter Windows lösen neu eingeblendete Fenster
+        Enter/Leave-Ereignisse aus — das ließ kleine Fenster endlos aufblitzen."""
+        def _enter(_e):
+            n = len(self.cfg.get("hero_items", {}).get(code, []))
+            extra = f"  ·  {n} Startitems" if n else ""
             try:
-                x, y = widget.winfo_pointerxy()            # aktuelle Mausposition
-                if widget.winfo_containing(x, y) is not widget:
-                    return
-            except tk.TclError:
-                return
-            _hide()
-            tip = tk.Toplevel(widget)
-            tip.withdraw()                                 # erst fertig bauen, dann zeigen
-            tip.overrideredirect(True)
-            try:
-                tip.attributes("-topmost", True)
+                self._hero_hint.config(text=f"{name}  ({code}){extra}", fg=PAL["text"])
             except tk.TclError:
                 pass
-            tk.Label(tip, text=text, bg=PAL["surface2"], fg=PAL["text"], font=self._fonts["small"],
-                     padx=6, pady=2, highlightthickness=1,
-                     highlightbackground=PAL["separator"]).pack()
-            tip.geometry(f"+{x + 12}+{y + 14}")
-            tip.deiconify()
-            self._tip_win = tip
 
-        def _enter(_e):
-            _hide()
-            pending["id"] = widget.after(450, _show)
-
+        def _leave(_e):
+            try:
+                self._hero_hint.config(text=self._hero_hint_default, fg=PAL["text_dim"])
+            except tk.TclError:
+                pass
         widget.bind("<Enter>", _enter, add="+")
-        widget.bind("<Leave>", _hide, add="+")
-        widget.bind("<ButtonPress>", _hide, add="+")
+        widget.bind("<Leave>", _leave, add="+")
 
     def _rebuild_hero_grid(self):
         for w in self.hero_frame.winfo_children():
@@ -1603,7 +1574,7 @@ class SkadiTerminalApp:
                                 activebackground=color, activeforeground=PAL["on_accent"],
                                 relief="flat", bd=0, cursor="hand2",
                                 padx=3, pady=1, highlightthickness=0)
-                self._tooltip(btn, name)
+                self._hover_name(btn, code, name)
                 btn.grid(row=current_row + i // cols, column=i % cols,
                          sticky="ew", padx=1, pady=1)
                 btn.bind("<Button-3>", lambda e, k=code: self._hero_context_menu(e, k))
@@ -1688,6 +1659,38 @@ class SkadiTerminalApp:
             hero_items.pop(code, None)
         save_config(self.cfg)
         self._refresh_hero_buttons()
+
+    def open_item_hero_chooser(self):
+        """Helden aus dem Pool mit Icon zeigen — Klick öffnet den Item-Editor."""
+        heroes = _build_heroes(self.cfg.get("hero_pool", []), self.cfg.get("custom_heroes", []))
+        win = tk.Toplevel(self.root)
+        win.title("Startitems – Held wählen")
+        win.configure(bg=PAL["bg"])
+        win.transient(self.root)
+        pad = tk.Frame(win, bg=PAL["bg"], padx=10, pady=8)
+        pad.pack(fill="both", expand=True)
+        tk.Label(pad, text="Für welchen Helden?  (• = hat schon Items)", bg=PAL["bg"], fg=PAL["text_dim"],
+                 font=self._fonts["small"], anchor="w").pack(fill="x", pady=(0, 4))
+        with_items = self.cfg.get("hero_items", {})
+        for attr in ATTR_ORDER:
+            lst = heroes.get(attr, [])
+            if not lst:
+                continue
+            tk.Label(pad, text=ATTR_DE[attr].upper(), bg=PAL["bg"], fg=ATTR_COLORS[attr],
+                     font=self._fonts["section"], anchor="w").pack(fill="x", pady=(6, 2))
+            grid = tk.Frame(pad, bg=PAL["bg"])
+            grid.pack(fill="x")
+            for i, (code, _name) in enumerate(lst):
+                n = len(with_items.get(code, []))
+                tk.Button(grid, text=f"{code} •" if n else code, image=self._hero_img(code),
+                          compound="left", anchor="w", width=96,
+                          command=lambda c=code: (win.destroy(), self.open_item_editor(c)),
+                          bg=PAL["btn_bg"], fg=ATTR_COLORS[attr], activebackground=PAL["hover"],
+                          activeforeground=ATTR_COLORS[attr], relief="flat", bd=0, cursor="hand2",
+                          font=self._fonts["hero"], padx=3, pady=1, highlightthickness=0
+                          ).grid(row=i // 5, column=i % 5, padx=1, pady=1, sticky="ew")
+        win.update_idletasks()
+        win.geometry(f"+{self.root.winfo_x() + 30}+{self.root.winfo_y() + 60}")
 
     def open_item_editor(self, hero: str):
         """Startitems für einen Helden festlegen — Items per Drag & Drop in die Kaufliste ziehen."""
@@ -1904,6 +1907,8 @@ class SkadiTerminalApp:
         def _on_mousewheel(evt):
             canvas.yview_scroll(int(-1*(evt.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # Mausrad beim Schließen wieder freigeben (sonst scrollt es ins Leere → Fehler)
+        win.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>") if e.widget is win else None)
 
         # checkboxes: code → BooleanVar
         check_vars: dict[str, tk.BooleanVar] = {}
@@ -1967,7 +1972,8 @@ class SkadiTerminalApp:
                 cell.grid(row=r, column=c, sticky="ew", padx=1, pady=1)
                 cell.columnconfigure(0, weight=1)
 
-                cb = tk.Checkbutton(cell, text=code, variable=var,
+                cb = tk.Checkbutton(cell, text=f" {code}", variable=var,
+                                    image=self._hero_img(code), compound="left",
                                     bg=cell_bg, fg=lbl_color,
                                     selectcolor=PAL["input_bg"],
                                     activebackground=cell_bg, activeforeground=color,
@@ -3116,6 +3122,7 @@ class SkadiTerminalApp:
             scrollregion=canvas.bbox("all")))
         canvas.bind_all("<MouseWheel>",
             lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        win.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>") if e.widget is win else None)
 
         frm = tk.Frame(inner, bg=PAL["surface"], padx=12, pady=10)
         frm.pack(fill="x", padx=10, pady=10)
