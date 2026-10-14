@@ -7,7 +7,10 @@ REM  und ersetzt die EXEs im Ordner DIESER Datei. Templates/Config bleiben unber
 REM  Diese Datei neben SkadiTerminal.exe / SkadiWaechter.exe legen und doppelklicken.
 REM ===========================================================================
 set "REPO=https://github.com/robfich/SkadiTerminal"
-set "ZIP_URL=%REPO%/archive/refs/heads/main.zip"
+REM Welcher Stand? Standard = main (stabil). Aktualisieren_WIP.bat ruft diese Datei mit "workinprogress" auf.
+set "BRANCH=main"
+if not "%~1"=="" set "BRANCH=%~1"
+set "ZIP_URL=%REPO%/archive/refs/heads/%BRANCH%.zip"
 set "TARGET=%~dp0"
 set "WORK=%LOCALAPPDATA%\SkadiTerminal\quelle"
 REM Jeder Lauf baut in eigenen, frischen Ordnern - gesperrte Reste alter Laeufe stoeren so nicht
@@ -23,15 +26,15 @@ if not defined PY (
   goto :fehler
 )
 
-echo  [2/5] Neuesten Stand von GitHub holen ...
+echo  [2/5] Neuesten Stand von GitHub holen ^(%BRANCH%^) ...
 where git >nul 2>nul
 if errorlevel 1 goto :zip
 if exist "%WORK%\.git" (
-  git -C "%WORK%" fetch --quiet origin main || goto :fehler
-  git -C "%WORK%" reset --quiet --hard origin/main || goto :fehler
+  git -C "%WORK%" fetch --quiet --depth 1 origin %BRANCH% || goto :fehler
+  git -C "%WORK%" reset --quiet --hard FETCH_HEAD || goto :fehler
 ) else (
   if exist "%WORK%" rmdir /s /q "%WORK%"
-  git clone --quiet --depth 1 "%REPO%.git" "%WORK%" || goto :fehler
+  git clone --quiet --depth 1 --branch %BRANCH% "%REPO%.git" "%WORK%" || goto :fehler
 )
 goto :bauen
 
@@ -41,7 +44,7 @@ REM Reste alter Laeufe wegraeumen, so weit moeglich (gesperrte Dateien werden ue
 for /d %%d in ("%LOCALAPPDATA%\SkadiTerminal\quelle_*") do rmdir /s /q "%%d" >nul 2>nul
 set "WORK=%LOCALAPPDATA%\SkadiTerminal\quelle_%RUNID%"
 mkdir "%WORK%" 2>nul
-powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $z=Join-Path $env:TEMP 'skadi_main_%RUNID%.zip'; Invoke-WebRequest '%ZIP_URL%' -OutFile $z; $t=Join-Path $env:TEMP 'skadi_unzip_%RUNID%'; Expand-Archive $z $t; Copy-Item (Join-Path $t 'SkadiTerminal-main\*') '%WORK%' -Recurse -Force; Remove-Item $z,$t -Recurse -Force" || goto :fehler
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $z=Join-Path $env:TEMP 'skadi_main_%RUNID%.zip'; Invoke-WebRequest '%ZIP_URL%' -OutFile $z; $t=Join-Path $env:TEMP 'skadi_unzip_%RUNID%'; Expand-Archive $z $t; Copy-Item (Join-Path (Get-ChildItem $t -Directory)[0].FullName '*') '%WORK%' -Recurse -Force; Remove-Item $z,$t -Recurse -Force" || goto :fehler
 
 :bauen
 cd /d "%WORK%"
@@ -61,6 +64,7 @@ copy /Y "%BUILD%\dist\SkadiTerminal.exe" "%TARGET%" >nul || goto :fehler
 copy /Y "%BUILD%\dist\SkadiWaechter.exe" "%TARGET%" >nul || goto :fehler
 copy /Y "waechter\Autostart_einrichten.bat" "%TARGET%" >nul
 copy /Y "Einrichten.bat" "%TARGET%" >nul
+if exist "Aktualisieren_WIP.bat" copy /Y "Aktualisieren_WIP.bat" "%TARGET%" >nul
 REM Neue Aktualisieren.bat nur ablegen, wenn sie sich unterscheidet (laufende .bat darf sich nicht selbst ersetzen)
 fc /b "Aktualisieren.bat" "%~f0" >nul 2>nul && (del "%TARGET%Aktualisieren.neu.bat" >nul 2>nul) || (copy /Y "Aktualisieren.bat" "%TARGET%Aktualisieren.neu.bat" >nul & echo  Hinweis: Neue Aktualisieren.bat liegt als Aktualisieren.neu.bat bereit - alte loeschen, neue umbenennen.)
 
@@ -68,7 +72,7 @@ start "" "%TARGET%SkadiWaechter.exe"
 cd /d "%TARGET%"
 rmdir /s /q "%BUILD%" >nul 2>nul
 echo.
-echo  FERTIG - SkadiTerminal und SkadiWaechter sind aktuell.
+echo  FERTIG - SkadiTerminal und SkadiWaechter sind aktuell ^(Stand: %BRANCH%^).
 echo  Ordner: %TARGET%
 echo  Der Waechter laeuft wieder; SkadiTerminal startet beim naechsten Dota-Start.
 echo.
