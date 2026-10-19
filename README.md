@@ -78,6 +78,26 @@ Tooltip-Fenster – die blitzten unter Windows ständig auf). Die Icons stammen 
 Bilder © Valve) und liegen in `items/heroes/<kürzel>.png`. Neuere Helden, die dort fehlen
 (Primal Beast, Muerta, Marci, Kez, Ringmaster, Largo), werden ohne Icon angezeigt.
 
+## Dota-Einstellungen mitnehmen (Button „D2 Settings“)
+
+Deine Dota-Einstellungen sind ins Programm eingebaut (`items/dota_settings/` – Tasten, Spieleinstellungen,
+Grafik, Hero-Builds, Kontrollgruppen, Chat). Das Fenster „D2 Settings“ zeigt:
+
+- **Meine Einstellungen** – „Als Ordner speichern …“ legt die Ordner `local` + `remote` (plus LIESMICH)
+  an einen Ort deiner Wahl; „Backups öffnen“ zeigt die automatischen Sicherungen.
+- **Steam-Accounts auf diesem PC** (aus `Steam\userdata\<Account-ID>\570`, mit Namen aus
+  `loginusers.vdf`):
+  - **Übernehmen** – kopiert die Einstellungen auf diesen Account (Dota muss zu sein; vorher wird
+    ein ZIP-Backup nach `dota_backups/` im Datenordner geschrieben). Fragt Steam beim nächsten Start
+    nach einem Cloud-Konflikt: „Lokale Dateien“ behalten.
+  - **Sichern** – speichert die aktuellen Einstellungen dieses Accounts als *deine* Einstellungen im
+    Google-Drive-Datenordner (`dota_settings/`); die haben danach Vorrang vor den eingebauten.
+- **Steam-ID umrechnen** – SteamID64, `[U:1:…]`, `STEAM_0:…`, Freundes-/Account-ID oder Dotabuff-/Stratz-/
+  Steam-Profil-Link einfügen → alle Formen zum Kopieren + Links zu Steam, Dotabuff, Stratz, OpenDota.
+
+Nicht enthalten (bewusst, das Repo ist öffentlich): Freundesliste, Stummschalt-Liste, Statistiken,
+letztes Match, Steam-Cloud-Verwaltung (`remotecache.vdf`).
+
 ## Was wird gespeichert?
 
 Alles in `skadi_config.json` im Datenordner (Google Drive) – **sofort bei jeder Änderung**, nicht erst beim

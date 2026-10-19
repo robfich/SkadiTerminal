@@ -12,3 +12,5 @@ skadi_debug_match.png
 /skadi_*.json
 /skadi_*.tmp
 /debug_*.png
+/dota_settings/
+/dota_backups/

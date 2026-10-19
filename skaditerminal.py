@@ -225,6 +225,133 @@ def hero_icon_path(code: str) -> Path:
 def item_label(key: str) -> str:
     return ITEM_BY_KEY.get(key, {}).get("label", key)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Dota-Einstellungen  (Steam\userdata\<Account-ID>\570\local + remote)
+# ──────────────────────────────────────────────────────────────────────────────
+BUNDLED_DOTA_SETTINGS = ITEMS_DIR / "dota_settings"      # mitgeliefert (aus dem Repo)
+SAVED_DOTA_SETTINGS   = DATA_DIR / "dota_settings"       # selbst gesichert (Google Drive)
+DOTA_BACKUP_DIR       = DATA_DIR / "dota_backups"        # Sicherung vor jedem Überschreiben
+STEAMID64_BASE        = 76561197960265728
+
+# Nur echte Einstellungen — keine Freundes-/Stummschalt-Listen, Statistiken oder Cloud-Verwaltung
+DOTA_SETTINGS_FILES = [
+    "remote/user_convars.vcfg", "remote/user_keys.vcfg",
+    "remote/cfg/dotakeys_personal.lst", "remote/cfg/herobuilds.cfg", "remote/cfg/hero_facet_config.cfg",
+    "remote/cfg/chat.cfg", "remote/cfg/dismissed_help_tips.txt",
+    "remote/scripts/control_groups.txt", "remote/scripts/item_suggest_preference.txt",
+    "local/cfg/user_convars_0_slot0.vcfg", "local/cfg/user_keys_0_slot0.vcfg",
+    "local/cfg/user_keys_0_slot1.vcfg", "local/cfg/user_keys_0_slot2.vcfg", "local/cfg/user_keys_0_slot3.vcfg",
+    "local/cfg/video.txt", "local/cfg/machine_convars.vcfg",
+]
+
+def find_steam_path() -> Path | None:
+    env = os.environ.get("SKADI_STEAM_PATH")
+    if env:
+        return Path(env)
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
+                p = Path(winreg.QueryValueEx(k, "SteamPath")[0])
+                if p.exists():
+                    return p
+        except OSError:
+            pass
+        for c in (r"C:\Program Files (x86)\Steam", r"C:\Program Files\Steam"):
+            if Path(c).exists():
+                return Path(c)
+    return None
+
+def _steam_login_names(steam: Path) -> dict[int, str]:
+    """Account-ID → „Anzeigename (Login)“ aus Steam/config/loginusers.vdf."""
+    import re
+    out = {}
+    try:
+        txt = (steam / "config" / "loginusers.vdf").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return out
+    for sid, body in re.findall(r'"(7656\d{13})"\s*\{(.*?)\}', txt, re.S):
+        persona = re.search(r'"PersonaName"\s+"(.*?)"', body)
+        login   = re.search(r'"AccountName"\s+"(.*?)"', body)
+        name = persona.group(1) if persona else ""
+        if login:
+            name = f"{name} ({login.group(1)})" if name else login.group(1)
+        out[int(sid) - STEAMID64_BASE] = name
+    return out
+
+def dota_accounts(steam: Path | None) -> list[dict]:
+    """Alle Steam-Accounts auf diesem PC, die schon Dota gestartet haben."""
+    if not steam:
+        return []
+    names = _steam_login_names(steam)
+    accs = []
+    try:
+        for d in (steam / "userdata").iterdir():
+            if d.name.isdigit() and (d / "570").is_dir():
+                acc = int(d.name)
+                accs.append({"id": acc, "path": d / "570", "name": names.get(acc, ""),
+                             "mtime": (d / "570").stat().st_mtime})
+    except OSError:
+        pass
+    return sorted(accs, key=lambda a: -a["mtime"])
+
+def steam_id_forms(text: str) -> dict | None:
+    """Erkennt SteamID64, [U:1:x], STEAM_0:Y:Z, Account-/Freundes-ID oder Profil-Links
+    (steamcommunity /profiles/, dotabuff, stratz, opendota) und liefert alle Formen."""
+    import re
+    t = (text or "").strip()
+    acc = None
+    if m := re.search(r"(7656119\d{10})", t):
+        acc = int(m.group(1)) - STEAMID64_BASE
+    elif m := re.search(r"\[?U:1:(\d+)\]?", t, re.I):
+        acc = int(m.group(1))
+    elif m := re.search(r"STEAM_\d:([01]):(\d+)", t, re.I):
+        acc = int(m.group(2)) * 2 + int(m.group(1))
+    elif m := re.search(r"(?:players|matches/player)/(\d+)", t):
+        acc = int(m.group(1))
+    elif re.fullmatch(r"\d{1,10}", t):
+        acc = int(t)
+    if acc is None or not (0 < acc < 2**32):
+        return None
+    sid64 = acc + STEAMID64_BASE
+    return {"acc": acc, "sid64": sid64, "sid3": f"[U:1:{acc}]", "sid2": f"STEAM_0:{acc % 2}:{acc // 2}",
+            "steam":    f"https://steamcommunity.com/profiles/{sid64}",
+            "dotabuff": f"https://www.dotabuff.com/players/{acc}",
+            "stratz":   f"https://stratz.com/players/{acc}",
+            "opendota": f"https://www.opendota.com/players/{acc}"}
+
+def dota_settings_source() -> tuple[Path, str]:
+    """Woher werden Einstellungen übernommen? Selbst gesicherte haben Vorrang."""
+    if (SAVED_DOTA_SETTINGS / "remote").is_dir():
+        ts = time.strftime("%d.%m.%Y %H:%M", time.localtime(SAVED_DOTA_SETTINGS.stat().st_mtime))
+        return SAVED_DOTA_SETTINGS, f"selbst gesichert ({ts}, Google Drive)"
+    return BUNDLED_DOTA_SETTINGS, "mitgeliefert (Stand im Programm)"
+
+def copy_dota_settings(src: Path, dst: Path) -> int:
+    """Kopiert die Einstellungs-Dateien (Whitelist) von src nach dst. Rückgabe: Anzahl."""
+    n = 0
+    for rel in DOTA_SETTINGS_FILES:
+        f = src / rel
+        if f.is_file():
+            target = dst / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, target)
+            n += 1
+    return n
+
+def backup_dota_folder(acc_path: Path, acc_id: int) -> Path:
+    """Sichert local + remote des Accounts als ZIP, bevor etwas überschrieben wird."""
+    import zipfile
+    DOTA_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    zpath = DOTA_BACKUP_DIR / f"{acc_id}_{time.strftime('%Y%m%d_%H%M%S')}.zip"
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+        for sub in ("local", "remote"):
+            for f in (acc_path / sub).rglob("*"):
+                if f.is_file():
+                    z.write(f, f.relative_to(acc_path))
+    return zpath
+
+
 def _get_config_path() -> Path:
     return DATA_DIR / f"{_PREFIX}_config.json"
 
@@ -978,7 +1105,7 @@ class SkadiTerminalApp:
             ("▶ Steam",       self.ui_start_steam),
             ("▶ Discord",     self.ui_start_discord),
             ("Voice & Video", self.ui_open_discord_voice_video),
-            ("D2 Settings",   self.ui_open_d2_settings_folder),
+            ("D2 Settings",   self.open_dota_settings_dialog),
         ]):
             self._btn(apps, txt, cmd).grid(row=0, column=col, sticky="ew",
                                            padx=(0 if col == 0 else 2, 0 if col == 3 else 2))
@@ -3872,6 +3999,193 @@ class SkadiTerminalApp:
     def ui_open_d2_settings_folder(self):
         ok = open_folder(D2_SETTINGS_PATH)
         self.status_var.set("D2 Settings geoeffnet." if ok else f"Ordner nicht gefunden: {D2_SETTINGS_PATH}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Dota-Einstellungen: Accounts, Übernehmen/Sichern, Steam-ID-Rechner
+    # ──────────────────────────────────────────────────────────────────
+    def open_dota_settings_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title("Dota-Einstellungen")
+        win.configure(bg=PAL["bg"])
+        win.transient(self.root)
+        pad = tk.Frame(win, bg=PAL["bg"], padx=12, pady=10)
+        pad.pack(fill="both", expand=True)
+        pad.columnconfigure(0, weight=1)
+
+        def header(text, row):
+            tk.Label(pad, text=text, bg=PAL["bg"], fg=PAL["text_dim"], font=self._fonts["section"],
+                     anchor="w").grid(row=row, column=0, sticky="ew", pady=(8 if row else 0, 3))
+
+        def small(parent, text, **kw):
+            return tk.Label(parent, text=text, bg=kw.pop("bg", PAL["bg"]), fg=kw.pop("fg", PAL["text_dim"]),
+                            font=self._fonts["small"], anchor="w", justify="left", **kw)
+
+        # ── Gespeicherte Einstellungen
+        header("MEINE EINSTELLUNGEN", 0)
+        src_box = tk.Frame(pad, bg=PAL["surface"], padx=8, pady=6)
+        src_box.grid(row=1, column=0, sticky="ew")
+        src_box.columnconfigure((0, 1), weight=1, uniform="ds")
+        src_lbl = small(src_box, "", bg=PAL["surface"], fg=PAL["text"])
+        src_lbl.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+
+        def _refresh_src():
+            src, label = dota_settings_source()
+            n = sum((src / r).is_file() for r in DOTA_SETTINGS_FILES)
+            src_lbl.config(text=f"Quelle: {label} · {n} Dateien\n"
+                                "Tasten, Spieleinstellungen, Grafik, Hero-Builds, Kontrollgruppen, Chat")
+        _refresh_src()
+
+        def _export():
+            src, _ = dota_settings_source()
+            dest = filedialog.askdirectory(parent=win, title="Wohin sollen die Einstellungen gespeichert werden?")
+            if not dest:
+                return
+            out = Path(dest) / "SkadiTerminal_Dota_Einstellungen"
+            n = copy_dota_settings(src, out)
+            (out / "LIESMICH.txt").write_text(
+                "Dota-2-Einstellungen (aus SkadiTerminal)\n\n"
+                "Die Ordner 'local' und 'remote' gehören nach:\n"
+                "  <Steam>\\userdata\\<Account-ID>\\570\\\n"
+                "Vorher Dota beenden. Fragt Steam beim nächsten Start nach einem Cloud-Konflikt,\n"
+                "'Lokale Dateien' behalten.\n"
+                "Einfacher: in SkadiTerminal → D2 Settings → 'Übernehmen' beim gewünschten Account.\n",
+                encoding="utf-8")
+            open_folder(str(out))
+            self.status_var.set(f"✔ {n} Einstellungs-Dateien gespeichert in {out}")
+
+        self._btn(src_box, "Als Ordner speichern …", _export).grid(row=1, column=0, sticky="ew", padx=(0, 2))
+        self._btn(src_box, "Backups öffnen",
+                  lambda: (DOTA_BACKUP_DIR.mkdir(parents=True, exist_ok=True),
+                           open_folder(str(DOTA_BACKUP_DIR)))).grid(row=1, column=1, sticky="ew", padx=(2, 0))
+
+        # ── Accounts auf diesem PC
+        header("STEAM-ACCOUNTS AUF DIESEM PC", 2)
+        acc_box = tk.Frame(pad, bg=PAL["surface"], padx=8, pady=6)
+        acc_box.grid(row=3, column=0, sticky="ew")
+        acc_box.columnconfigure(0, weight=1)
+        steam = find_steam_path()
+        accs = dota_accounts(steam)
+        if not accs:
+            small(acc_box, "Keine Steam-Accounts mit Dota gefunden." +
+                  (f"\nSteam-Ordner: {steam}" if steam else "\nSteam wurde nicht gefunden."),
+                  bg=PAL["surface"]).grid(row=0, column=0, sticky="ew")
+
+        def _apply(acc):
+            if any((p.info["name"] or "").lower() == "dota2.exe" for p in psutil.process_iter(["name"])):
+                messagebox.showwarning("Dota läuft", "Bitte erst Dota beenden, dann übernehmen.",
+                                       parent=win)
+                return
+            src, label = dota_settings_source()
+            if not messagebox.askyesno(
+                    "Einstellungen übernehmen?",
+                    f"Einstellungen ({label}) auf Account {acc['id']} {acc['name']} übertragen?\n\n"
+                    "Die aktuellen Dateien des Accounts werden vorher als ZIP gesichert.\n"
+                    "Fragt Steam beim nächsten Dota-Start nach einem Cloud-Konflikt:\n"
+                    "„Lokale Dateien“ behalten.", parent=win):
+                return
+            try:
+                z = backup_dota_folder(acc["path"], acc["id"])
+                n = copy_dota_settings(src, acc["path"])
+            except OSError as e:
+                messagebox.showerror("Fehler", f"Übernehmen fehlgeschlagen:\n{e}", parent=win)
+                return
+            self.status_var.set(f"✔ {n} Dateien auf Account {acc['id']} übernommen · Backup: {z.name}")
+
+        def _save(acc):
+            if not messagebox.askyesno(
+                    "Einstellungen sichern?",
+                    f"Die Einstellungen von Account {acc['id']} {acc['name']} als deine Einstellungen\n"
+                    "im Google Drive speichern? (Ersetzt die bisher gesicherten.)", parent=win):
+                return
+            try:
+                if SAVED_DOTA_SETTINGS.exists():
+                    shutil.rmtree(SAVED_DOTA_SETTINGS)
+                n = copy_dota_settings(acc["path"], SAVED_DOTA_SETTINGS)
+            except OSError as e:
+                messagebox.showerror("Fehler", f"Sichern fehlgeschlagen:\n{e}", parent=win)
+                return
+            _refresh_src()
+            self.status_var.set(f"✔ {n} Einstellungs-Dateien von Account {acc['id']} gesichert.")
+
+        for r, acc in enumerate(accs):
+            row = tk.Frame(acc_box, bg=PAL["surface"])
+            row.grid(row=r, column=0, sticky="ew", pady=2)
+            row.columnconfigure(0, weight=1)
+            when = time.strftime("%d.%m.%Y", time.localtime(acc["mtime"]))
+            tk.Label(row, text=acc["name"] or "(Name unbekannt)", bg=PAL["surface"], fg=PAL["text"],
+                     font=self._fonts["ui_bold"], anchor="w").grid(row=0, column=0, sticky="ew")
+            small(row, f"Account-ID {acc['id']}  ·  zuletzt {when}", bg=PAL["surface"]
+                  ).grid(row=1, column=0, sticky="ew")
+            btns = tk.Frame(row, bg=PAL["surface"])
+            btns.grid(row=0, column=1, rowspan=2, sticky="e")
+            self._small_btn(btns, "Übernehmen", lambda a=acc: _apply(a)).pack(side="left", padx=1)
+            self._small_btn(btns, "Sichern", lambda a=acc: _save(a)).pack(side="left", padx=1)
+            self._small_btn(btns, "Ordner", lambda a=acc: open_folder(str(a["path"]))).pack(side="left", padx=1)
+            self._small_btn(btns, "IDs", lambda a=acc: (id_var.set(str(a["id"])), _convert())
+                            ).pack(side="left", padx=1)
+
+        # ── Steam-ID umrechnen
+        header("STEAM-ID UMRECHNEN", 4)
+        id_box = tk.Frame(pad, bg=PAL["surface"], padx=8, pady=6)
+        id_box.grid(row=5, column=0, sticky="ew")
+        id_box.columnconfigure(1, weight=1)
+        small(id_box, "ID oder Profil-Link (SteamID64, [U:1:…], STEAM_0:…, Freundes-ID, Dotabuff/Stratz):",
+              bg=PAL["surface"]).grid(row=0, column=0, columnspan=3, sticky="ew")
+        id_var = tk.StringVar()
+        ent = tk.Entry(id_box, textvariable=id_var, bg=PAL["input_bg"], fg=PAL["text"],
+                       insertbackground=PAL["text"], relief="flat", font=self._fonts["mono"])
+        ent.grid(row=1, column=0, columnspan=2, sticky="ew", pady=4, ipady=3)
+        out = tk.Frame(id_box, bg=PAL["surface"])
+        out.grid(row=2, column=0, columnspan=3, sticky="ew")
+        out.columnconfigure(1, weight=1)
+
+        def _copy(text):
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.status_var.set(f"Kopiert: {text}")
+
+        def _convert(*_):
+            for w in out.winfo_children():
+                w.destroy()
+            f = steam_id_forms(id_var.get())
+            if not f:
+                if id_var.get().strip():
+                    small(out, "Nicht erkannt. Eigene Profil-Namen (steamcommunity.com/id/…) bitte\n"
+                               "über „steamid.io“ nachschlagen.", bg=PAL["surface"], fg=PAL["warn"]
+                          ).grid(row=0, column=0, columnspan=3, sticky="ew")
+                return
+            rows = [("Freundes-/Account-ID", str(f["acc"])), ("SteamID64", str(f["sid64"])),
+                    ("SteamID3", f["sid3"]), ("SteamID", f["sid2"])]
+            for i, (k, v) in enumerate(rows):
+                small(out, k, bg=PAL["surface"]).grid(row=i, column=0, sticky="w", padx=(0, 8))
+                tk.Label(out, text=v, bg=PAL["surface"], fg=PAL["text"], font=self._fonts["mono"],
+                         anchor="w").grid(row=i, column=1, sticky="ew")
+                self._small_btn(out, "kopieren", lambda t=v: _copy(t)).grid(row=i, column=2, sticky="e", pady=1)
+            links = tk.Frame(out, bg=PAL["surface"])
+            links.grid(row=len(rows), column=0, columnspan=3, sticky="ew", pady=(4, 0))
+            links.columnconfigure((0, 1, 2, 3), weight=1, uniform="links")
+            for c, (label, key) in enumerate((("Steam-Profil", "steam"), ("Dotabuff", "dotabuff"),
+                                              ("Stratz", "stratz"), ("OpenDota", "opendota"))):
+                self._small_btn(links, label, lambda u=f[key]: webbrowser.open(u)).grid(
+                    row=0, column=c, sticky="ew", padx=1)
+
+        self._btn(id_box, "Umrechnen", _convert, accent=True).grid(row=1, column=2, sticky="ew",
+                                                                   padx=(4, 0), pady=4)
+        ent.bind("<Return>", _convert)
+        foot = tk.Frame(pad, bg=PAL["bg"])
+        foot.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+        foot.columnconfigure((0, 1), weight=1, uniform="foot")
+        self._btn(foot, "steamid.io öffnen", lambda: webbrowser.open("https://steamid.io/")
+                  ).grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        old = Path(D2_SETTINGS_PATH)
+        self._btn(foot, "Alter Ordner „D2 Setting“" if old.exists() else "Schließen",
+                  (lambda: open_folder(str(old))) if old.exists() else win.destroy
+                  ).grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        if accs:
+            id_var.set(str(accs[0]["id"]))
+            _convert()
+        win.update_idletasks()
+        win.geometry(f"+{self.root.winfo_x() + 30}+{self.root.winfo_y() + 40}")
 
     # ──────────────────────────────────────────────────────────────────
     # Auflösung wechseln
